@@ -14,7 +14,7 @@ type ParsedReleaseNotes = {
     url?: string;
 };
 
-const LATEST_RELEASE_URL = 'https://github.com/Natively-AI-assistant/natively-cluely-ai-assistant/releases/latest';
+const LATEST_RELEASE_URL = 'https://github.com/RahulSP-4601/Hintily/releases/latest';
 
 const UpdateBanner: React.FC = () => {
     const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -154,7 +154,7 @@ const UpdateBanner: React.FC = () => {
                 const dmgSuffix = isArm ? 'arm64' : 'x64';
                 setInstructionsArch(dmgSuffix);
                 const version = updateInfo.version.replace('v', '');
-                const url = `https://github.com/Natively-AI-assistant/natively-cluely-ai-assistant/releases/download/v${version}/Natively-${version}-${dmgSuffix}.dmg`;
+                const url = `https://github.com/RahulSP-4601/Hintily/releases/download/v${version}/Hintily-${version}-${dmgSuffix}.dmg`;
                 window.electronAPI.openExternal(url);
                 setStatus('instructions');
             } catch (err) {

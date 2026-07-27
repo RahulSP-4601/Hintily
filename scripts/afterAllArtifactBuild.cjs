@@ -38,7 +38,8 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
-const VOLNAME = 'Natively';
+const packageJson = require('../package.json');
+const VOLNAME = packageJson.build?.productName || 'Hintily';
 const BACKGROUND = path.resolve(__dirname, '..', 'assets', 'dmg-background.png');
 const VOLICON = path.resolve(__dirname, '..', 'assets', 'natively.icns');
 
@@ -257,15 +258,15 @@ module.exports = async function afterAllArtifactBuild(buildResult) {
     return [];
   }
 
-  // Map electron-builder's arch output dirs to their final dmg names. eb names the
-  // arm64 dmg "<name>-arm64.dmg" and the x64 dmg "<name>.dmg" (matching latest-mac.yml).
+  // Map electron-builder's arch output dirs to the public artifact names used
+  // by UpdateBanner's manual-download fallback.
   const archMap = [
     { archDir: 'mac-arm64', suffix: '-arm64' },
-    { archDir: 'mac', suffix: '' },
+    { archDir: 'mac', suffix: '-x64' },
   ];
 
   const rebuiltDmgs = [];
-  const version = require('../package.json').version;
+  const version = packageJson.version;
   for (const { archDir, suffix } of archMap) {
     const appPath = findAppForArch(outDir, archDir);
     if (!appPath) continue;

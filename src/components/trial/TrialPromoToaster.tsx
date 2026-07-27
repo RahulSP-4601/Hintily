@@ -159,7 +159,7 @@ export const TrialPromoToaster: React.FC<Props> = ({
               {/* Header */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '22px', paddingBottom: '16px' }}>
                 <span style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: t3 }}>
-                  Natively Trial
+                  Hintily Trial
                 </span>
                 <button onClick={handleDismiss} aria-label="Dismiss"
                   style={{ 
@@ -198,7 +198,7 @@ export const TrialPromoToaster: React.FC<Props> = ({
                     Try everything. No card needed.
                   </h2>
                   <p style={{ fontSize: '13px', lineHeight: 1.66, color: t3, margin: '0 auto', maxWidth: '330px' }}>
-                    Full Natively API access — AI chat, meeting transcription, and company research — free for 10 minutes. Bound to this device. No sign-in.
+                    Full Hintily AI access — AI chat, meeting transcription, and company research — free for 10 minutes. Bound to this device. No sign-in.
                   </p>
                 </motion.div>
 

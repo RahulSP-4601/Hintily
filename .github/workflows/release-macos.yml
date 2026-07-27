@@ -22,6 +22,10 @@ name: Release (macOS signed + notarized)
 #   APPLE_API_KEY_P8_BASE64 base64 of the App Store Connect API key .p8 file
 #   APPLE_API_KEY_ID        the key id (e.g. T9GPZ92M7K)
 #   APPLE_API_ISSUER        the issuer UUID (App Store Connect → Users and Access → Integrations)
+#   HINTILY_SUPABASE_ANON_KEY public Supabase anon/publishable key bundled into the desktop app
+#
+# ── REQUIRED REPOSITORY VARIABLES ────────────────────────────────────────
+#   HINTILY_SUPABASE_URL    production Supabase project URL
 #
 # Notes:
 #   - We do NOT use the local `natively-notary` keychain profile in CI — that
@@ -109,6 +113,8 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           # GH token for electron-builder publish (artifacts attach to the release on tag builds).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HINTILY_SUPABASE_URL: ${{ vars.HINTILY_SUPABASE_URL }}
+          HINTILY_SUPABASE_ANON_KEY: ${{ secrets.HINTILY_SUPABASE_ANON_KEY }}
         # Explicit stages (NOT `npm run dist:signed`): the dist:signed chain re-runs
         # `npm run build` (rimraf dist dist-electron) which can race electron-builder's
         # native rebuild and ENOENT on dist-electron at package time. Building the stages
@@ -119,6 +125,7 @@ jobs:
           which create-dmg >/dev/null 2>&1 || brew install create-dmg
           npm run build
           npm run build:electron
+          npm run prepare:hintily-config
           NATIVELY_BUILD_ALL_MAC_ARCHES=1 npm run build:native
           node scripts/ensure-sharp-mac-deps.js
           ./node_modules/.bin/electron-builder --mac --config electron-builder.signed.cjs --publish never
@@ -126,8 +133,8 @@ jobs:
       - name: Verify signature + notarization (both arches + DMGs)
         run: |
           set -euo pipefail
-          APPS=$(find release -maxdepth 2 -name 'Natively.app' -path '*mac*')
-          if [ -z "$APPS" ]; then echo "No Natively.app found in release/"; exit 1; fi
+          APPS=$(find release -maxdepth 2 -name 'Hintily.app' -path '*mac*')
+          if [ -z "$APPS" ]; then echo "No Hintily.app found in release/"; exit 1; fi
           for APP in $APPS; do
             echo "::group::Verifying app: $APP"
             codesign -dv --verbose=4 "$APP" 2>&1 | sed -n '1,20p'
@@ -141,7 +148,7 @@ jobs:
             # — exactly the "never opens again" failure mode we shipped to
             # production in the past. Treat as a hard release gate.
             if xattr -l "$APP" 2>/dev/null | grep -q 'com.apple.quarantine'; then
-              echo "::error::Natively.app carries com.apple.quarantine — would refuse to launch on a fresh macOS profile. Re-run electron-builder to clean the build artifact."
+              echo "::error::Hintily.app carries com.apple.quarantine — would refuse to launch on a fresh macOS profile. Re-run electron-builder to clean the build artifact."
               exit 1
             fi
             echo "::endgroup::"
@@ -168,8 +175,8 @@ jobs:
       - name: Verify packaged local fallback assets (per-arch)
         run: |
           set -euo pipefail
-          APPS=$(find release -maxdepth 2 -name 'Natively.app' -path '*mac*')
-          if [ -z "$APPS" ]; then echo "No Natively.app found in release/"; exit 1; fi
+          APPS=$(find release -maxdepth 2 -name 'Hintily.app' -path '*mac*')
+          if [ -z "$APPS" ]; then echo "No Hintily.app found in release/"; exit 1; fi
           for APP in $APPS; do
             echo "::group::Verify packaged local assets: $APP"
             node scripts/verify-packaged-local-assets.mjs --app "$APP"
@@ -184,10 +191,10 @@ jobs:
       - name: Packaged no-Ollama no-keys smoke (arm64)
         run: |
           set -euo pipefail
-          APPS=$(find release -maxdepth 2 -name 'Natively.app' -path '*mac*')
-          if [ -z "$APPS" ]; then echo "No Natively.app found in release/"; exit 1; fi
+          APPS=$(find release -maxdepth 2 -name 'Hintily.app' -path '*mac*')
+          if [ -z "$APPS" ]; then echo "No Hintily.app found in release/"; exit 1; fi
           APP=$(echo "$APPS" | tr ' ' '\n' | grep arm64 | head -n1)
-          if [ -z "$APP" ]; then echo "No arm64 Natively.app found"; exit 1; fi
+          if [ -z "$APP" ]; then echo "No arm64 Hintily.app found"; exit 1; fi
           echo "::group::Smoke: $APP"
           node scripts/smoke-packaged-local-fallback.mjs --app "$APP" --no-ollama --no-keys
           echo "::endgroup::"
@@ -195,9 +202,31 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: natively-macos-signed
+          name: hintily-macos-signed
           path: |
             release/*.dmg
             release/*.zip
             release/latest-mac.yml
           if-no-files-found: error
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          ASSETS=(
+            release/*.dmg
+            release/*.zip
+            release/*.yml
+            release/*.blockmap
+          )
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "::error::No release assets were produced."
+            exit 1
+          fi
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber

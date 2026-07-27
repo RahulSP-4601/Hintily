@@ -13,6 +13,7 @@ import UpdateBanner from "./components/UpdateBanner"
 import { NativelyQuotaBanner } from "./components/NativelyQuotaBanner"
 import { FreeTrialBanner }      from "./components/trial/FreeTrialBanner"
 import { FreeTrialModal }       from "./components/trial/FreeTrialModal"
+import { LEGACY_NATIVELY_COMMERCE_ENABLED } from "./config/brand"
 import { OrchestratorProvider, OrchestratedToasterHost, setUserState as setOrchestratorUserState, emitOrchestratorEvent } from "./components/onboarding/OrchestratedToasterHost"
 import ReviewPromptHost from "./components/ReviewPromptHost"
 // NOTE: explicit `.ts` extension is load-bearing. Vite's default resolver
@@ -1125,7 +1126,7 @@ const App: React.FC = () => {
       </AnimatePresence>
 
       {!isolateGlobalSurfaces && <UpdateBanner />}
-      {!isolateGlobalSurfaces && <NativelyQuotaBanner />}
+      {LEGACY_NATIVELY_COMMERCE_ENABLED && !isolateGlobalSurfaces && <NativelyQuotaBanner />}
 
       {/* Orchestrated onboarding toasters (single-slot, controlled by OnboardingOrchestrator) */}
       {!isolateOnboarding && (
@@ -1142,7 +1143,7 @@ const App: React.FC = () => {
       {!isolateGlobalSurfaces && shouldMountDevReviewHost() && <ReviewPromptHost />}
 
       {/* Free trial countdown banner — only in launcher window while trial is active */}
-      {!isolateGlobalSurfaces && (isLauncherWindow || isDefault) && activeTrial && (
+      {LEGACY_NATIVELY_COMMERCE_ENABLED && !isolateGlobalSurfaces && (isLauncherWindow || isDefault) && activeTrial && (
         <FreeTrialBanner
           expiresAt={activeTrial.expiresAt}
           usage={activeTrial.usage}
@@ -1151,7 +1152,7 @@ const App: React.FC = () => {
       )}
 
       {/* Post-trial upgrade modal — shown when trial expires */}
-      {!isolateModals && (isLauncherWindow || isDefault) && showTrialExpiredModal && (
+      {LEGACY_NATIVELY_COMMERCE_ENABLED && !isolateModals && (isLauncherWindow || isDefault) && showTrialExpiredModal && (
         <FreeTrialModal
           usage={activeTrial?.usage ?? { ai: 0, stt_seconds: 0, search: 0 }}
           onByok={async () => {
@@ -1171,7 +1172,7 @@ const App: React.FC = () => {
       )}
 
       {/* Ad toasters */}
-      {!isolateModals && isLauncherMainView && !isSettingsOpen && (
+      {LEGACY_NATIVELY_COMMERCE_ENABLED && !isolateModals && isLauncherMainView && !isSettingsOpen && (
         <NativelyApiPromoToaster
           isOpen={activeAd === 'natively_api'}
           onDismiss={() => dismissAd('natively_api')}

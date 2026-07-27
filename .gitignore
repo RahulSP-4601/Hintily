@@ -124,6 +124,10 @@ web_modules/
 .env.test.local
 .env.production.local
 .env.local
+.env.*
+!.env.example
+!.env.business.example
+!.env.future.example
 
 evinresume.pdf
 TPA Campus JD - SalesCode.pdf
@@ -445,5 +449,7 @@ tools/
 !docs/
 docs/*
 !docs/VISION_MODEL_BENCHMARK.md
+!docs/phases.md
+!docs/RECOVERY.md
+build/hintily.public-config.json
 benchmark-results/
-

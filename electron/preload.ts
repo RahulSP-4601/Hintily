@@ -15,6 +15,12 @@ interface DomCaptureMeta {
 
 // Types for the exposed Electron API
 interface ElectronAPI {
+  hintilyAuthGetStatus: () => Promise<HintilyAuthStatus>;
+  hintilyAuthSignInWithGoogle: () => Promise<HintilyAuthResult>;
+  hintilyAuthRefresh: () => Promise<HintilyAuthResult>;
+  hintilyAuthSignOut: () => Promise<HintilyAuthResult>;
+  hintilyAuthDeleteAccount: () => Promise<HintilyAuthResult>;
+  onHintilyAuthChanged: (callback: (status: HintilyAuthStatus) => void) => () => void;
   updateContentDimensions: (dimensions: { width: number; height: number }) => Promise<void>;
   updateContentDimensionsCentered: (dimensions: { width: number; height: number }) => Promise<void>;
   getRecognitionLanguages: () => Promise<Record<string, any>>;
@@ -1026,6 +1032,26 @@ interface ElectronAPI {
   skillsPreview: (payload: SkillUploadPayload) => Promise<unknown>;
 }
 
+interface HintilyUser {
+  id: string;
+  email: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
+}
+
+type HintilyAuthStatus =
+  | { state: 'unconfigured'; user: null; error: string }
+  | { state: 'signed_out'; user: null }
+  | { state: 'signing_in'; user: null }
+  | { state: 'signed_in'; user: HintilyUser }
+  | { state: 'error'; user: null; error: string };
+
+interface HintilyAuthResult {
+  ok: boolean;
+  status: HintilyAuthStatus;
+  error?: string;
+}
+
 export const PROCESSING_EVENTS = {
   //global states
   UNAUTHORIZED: 'procesing-unauthorized',
@@ -1045,6 +1071,16 @@ export const PROCESSING_EVENTS = {
 
 // Expose the Electron API to the renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
+  hintilyAuthGetStatus: () => ipcRenderer.invoke('hintily-auth:get-status'),
+  hintilyAuthSignInWithGoogle: () => ipcRenderer.invoke('hintily-auth:sign-in-google'),
+  hintilyAuthRefresh: () => ipcRenderer.invoke('hintily-auth:refresh'),
+  hintilyAuthSignOut: () => ipcRenderer.invoke('hintily-auth:sign-out'),
+  hintilyAuthDeleteAccount: () => ipcRenderer.invoke('hintily-auth:delete-account'),
+  onHintilyAuthChanged: (callback: (status: HintilyAuthStatus) => void) => {
+    const subscription = (_: unknown, status: HintilyAuthStatus) => callback(status);
+    ipcRenderer.on('hintily-auth:changed', subscription);
+    return () => ipcRenderer.removeListener('hintily-auth:changed', subscription);
+  },
   // ── TEST-ONLY eval bridges (gated in main by NODE_ENV==='test') ──────────────
   // Exposed unconditionally but inert in production: the underlying IPC handlers
   // ('test-inject-transcript') refuse unless NODE_ENV==='test'. Used by the real

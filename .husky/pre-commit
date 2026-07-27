@@ -11,6 +11,9 @@
 # them here so the toolchain still runs.
 set -e
 
+# 0. Block likely secrets before any slower checks.
+npm run scan:secrets
+
 # 1. Native-arch gate. Exit non-zero on arch mismatch.
 #    Skipped on non-macOS — verify script no-ops there.
 node scripts/verify-native-arch.js

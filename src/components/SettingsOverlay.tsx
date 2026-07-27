@@ -13,12 +13,11 @@ import { analytics } from '../lib/analytics/analytics.service';
 import { AboutSection } from './AboutSection';
 import { HelpSettings } from './settings/HelpSettings';
 import { AIProvidersSettings } from './settings/AIProvidersSettings';
-import { NativelyApiSettings } from './settings/NativelyApiSettings';
-import { NativelyProSettings } from './settings/NativelyProSettings';
 import { PhoneMirrorSettings } from './settings/PhoneMirrorSettings';
 import { IntelligenceSettings } from './settings/IntelligenceSettings';
 import { SkillsSettings } from './settings/SkillsSettings';
 import { VisionModelBenchmark } from './settings/VisionModelBenchmark';
+import { HintilyAccountSettings } from './settings/HintilyAccountSettings';
 import { LocalWhisperModelPanel } from './LocalWhisperModelPanel';
 import nativelyLogo from '../assets/logo.webp';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -36,6 +35,7 @@ import { getMeetingInterfaceTheme, setMeetingInterfaceTheme, type MeetingInterfa
 import { KeyRecorder } from './ui/KeyRecorder';
 import { ProfileVisualizer, PremiumUpgradeModal } from '../premium';
 import icon from './icon.png';
+import { LEGACY_NATIVELY_COMMERCE_ENABLED } from '../config/brand';
 
 // ---------------------------------------------------------------------------
 // StarRating — renders filled/empty stars for culture ratings
@@ -366,12 +366,13 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
     isOpen,
     onClose,
     initialTab = 'general',
-    initialIsPremium = null,
     initialHasNativelyKey = false,
 }) => {
+    const normalizeHintilyTab = (tab: string) =>
+        tab === 'natively-api' || tab === 'natively-pro' ? 'account' : tab;
     const isLight = useResolvedTheme() === 'light';
     const { t, lang, setLang } = useLanguage();
-    const [activeTab, setActiveTab] = useState(initialTab);
+    const [activeTab, setActiveTab] = useState(normalizeHintilyTab(initialTab));
     const [visionBenchmarkEnabled, setVisionBenchmarkEnabled] = useState(false);
 
     useEffect(() => {
@@ -383,7 +384,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
     // Sync active tab when modal opens
     useEffect(() => {
         if (isOpen && initialTab) {
-            setActiveTab(initialTab);
+            setActiveTab(normalizeHintilyTab(initialTab));
 
 
         }
@@ -1466,24 +1467,16 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                 <h2 className="mb-0 text-[13px] font-bold uppercase tracking-[0.01em] text-text-primary">{t('Settings')}</h2>
                                 <nav className="mt-2 space-y-1">
                                     <button
+                                        onClick={() => setActiveTab('account')}
+                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 relative ${activeTab === 'account' ? "bg-bg-item-active text-text-primary before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-[2px] before:rounded-full before:bg-accent-primary" : "text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50"}`}
+                                    >
+                                        <User size={16} /> Account
+                                    </button>
+                                    <button
                                         onClick={() => setActiveTab('general')}
                                         className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 relative ${activeTab === 'general' ? "bg-bg-item-active text-text-primary before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-[2px] before:rounded-full before:bg-accent-primary" : "text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50"}`}
                                     >
                                         <Monitor size={16} /> {t('General')}
-                                    </button>
-                                    <button
-                                        onClick={() => setActiveTab('natively-api')}
-                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 relative ${activeTab === 'natively-api' ? "bg-bg-item-active text-text-primary before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-[2px] before:rounded-full before:bg-accent-primary" : "text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50"}`}
-                                    >
-                                        <img src={nativelyLogo} alt="" className={`w-4 h-4 object-contain ${activeTab === 'natively-api' ? 'opacity-100' : 'opacity-70'}`} draggable={false} />
-                                        <span>Natively API</span>
-                                    </button>
-                                    <button
-                                        onClick={() => setActiveTab('natively-pro')}
-                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 relative ${activeTab === 'natively-pro' ? "bg-bg-item-active text-text-primary before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-[2px] before:rounded-full before:bg-accent-primary" : "text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50"}`}
-                                    >
-                                        <img src={nativelyLogo} alt="" className={`w-4 h-4 object-contain ${activeTab === 'natively-pro' ? 'opacity-100' : 'opacity-70'}`} draggable={false} />
-                                        <span>Natively Pro</span>
                                     </button>
                                     <button
                                         onClick={() => setActiveTab('ai-providers')}
@@ -1560,19 +1553,22 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                     onClick={() => window.electronAPI.quitApp()}
                                     className="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-3"
                                 >
-                                    <LogOut size={16} /> {t('Quit Natively')}
+                                    <LogOut size={16} /> Quit Hintily
                                 </button>
                             </div>
                         </div>
 
                         {/* Content */}
                         <div className="flex-1 bg-bg-main overflow-y-auto p-8 relative">
+                            {activeTab === 'account' && (
+                                <HintilyAccountSettings />
+                            )}
                             {activeTab === 'general' && (
                                 <div className="space-y-6 animated fadeIn">
                                     <div className="space-y-3.5">
                                         <div>
                                             <h3 className="text-lg font-bold text-text-primary mb-1">{t('General settings')}</h3>
-                                            <p className="text-xs text-text-secondary mb-2">{t('Customize how Natively works for you')}</p>
+                                            <p className="text-xs text-text-secondary mb-2">Customize how Hintily works for you</p>
 
                                             <div className={`rounded-xl border ${isLight ? 'bg-bg-card border-border-subtle divide-y divide-border-subtle' : 'bg-transparent border-transparent divide-y divide-border-subtle/20'}`}>
                                             <div className="space-y-0">
@@ -2231,12 +2227,6 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                             {activeTab === 'skills' && (
                                 <SkillsSettings />
                             )}
-                            {activeTab === 'natively-api' && (
-                                <NativelyApiSettings initialIsSaved={hasNativelyKey} />
-                            )}
-                            {activeTab === 'natively-pro' && (
-                                <NativelyProSettings initialIsPremium={initialIsPremium} />
-                            )}
                             {activeTab === 'keybinds' && (
                                 <div className="space-y-5 animated fadeIn select-text pb-4">
                                     <div className="flex items-start justify-between">
@@ -2417,7 +2407,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                         value={sttProvider}
                                                         onChange={(val) => handleSttProviderChange(val as any)}
                                                         options={[
-                                                            ...(hasNativelyKey ? [{ id: 'natively', label: 'Natively API', badge: 'Saved' as const, recommended: true, desc: t('Managed transcription via Natively backend'), color: 'blue', icon: <Mic size={14} /> }] : []),
+                                                            ...(LEGACY_NATIVELY_COMMERCE_ENABLED && hasNativelyKey ? [{ id: 'natively', label: 'Natively API', badge: 'Saved' as const, recommended: true, desc: t('Managed transcription via Natively backend'), color: 'blue', icon: <Mic size={14} /> }] : []),
                                                             { id: 'google', label: 'Google Cloud', badge: googleServiceAccountPath ? 'Saved' : null, recommended: true, desc: t('gRPC streaming via Service Account'), color: 'blue', icon: <Mic size={14} /> },
                                                             { id: 'groq', label: 'Groq Whisper', badge: hasStoredSttGroqKey ? 'Saved' : null, recommended: true, desc: t('Ultra-fast REST transcription'), color: 'orange', icon: <Mic size={14} /> },
                                                             { id: 'openai', label: 'OpenAI Whisper', badge: hasStoredSttOpenaiKey ? 'Saved' : null, desc: t('OpenAI-compatible Whisper API'), color: 'green', icon: <Mic size={14} /> },

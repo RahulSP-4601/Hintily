@@ -141,7 +141,7 @@ export const SupportToaster: React.FC<SupportToasterProps> = ({ isOpen, onDismis
                             {/* Top header with dismiss button */}
                             <div className="relative z-10 w-full flex justify-between items-center px-6 pt-5 pb-3" style={{ borderBottom: `1px solid ${rule}` }}>
                                 <span style={{ fontSize: '10.5px', fontWeight: 660, letterSpacing: '0.15em', textTransform: 'uppercase', color: t2 }}>
-                                    Support Natively
+                                    Support Hintily
                                 </span>
                                 <button onClick={handleDismiss} aria-label="Dismiss"
                                     className="w-7 h-7 flex items-center justify-center rounded-full opacity-45 transition-all animate-none"
@@ -212,7 +212,7 @@ export const SupportToaster: React.FC<SupportToasterProps> = ({ isOpen, onDismis
                                         Used by thousands.
                                     </h3>
                                     <p style={{ color: t3 }} className="text-[13.5px] leading-[1.6] max-w-[340px] mx-auto font-medium antialiased">
-                                        Natively is built and maintained by one developer. If it's part of your daily workflow, your support keeps it moving forward.
+                                        Hintily is built and maintained by one developer. If it's part of your daily workflow, your support keeps it moving forward.
                                     </p>
                                 </div>
 

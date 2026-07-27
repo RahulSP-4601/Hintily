@@ -20,6 +20,7 @@ import { BrowserExtensionToaster } from './BrowserExtensionToaster';
 import { TrialPromoToaster } from '../trial/TrialPromoToaster';
 import { SupportToaster } from '../SupportToaster';
 import ReviewPromptHost from '../ReviewPromptHost';
+import { LEGACY_NATIVELY_COMMERCE_ENABLED } from '../../config/brand';
 
 // ─── Event channel ────────────────────────────────────────────────
 
@@ -75,6 +76,12 @@ export const OrchestratedToasterHost: React.FC = () => {
   const onDismiss = (id: ToasterId) => () => orch.markDismissed(id);
   const onSkip = (id: ToasterId) => () => orch.markSkipped(id);
 
+  useEffect(() => {
+    if (!LEGACY_NATIVELY_COMMERCE_ENABLED && activeId === 'trial_promo') {
+      orch.markSkipped('trial_promo');
+    }
+  }, [activeId, orch]);
+
   if (!activeId) return null;
 
   // Development-only native-OOM bisection. Keep orchestration/state updates
@@ -127,6 +134,7 @@ export const OrchestratedToasterHost: React.FC = () => {
       return null;
 
     case 'trial_promo':
+      if (!LEGACY_NATIVELY_COMMERCE_ENABLED) return null;
       // TrialPromoToaster needs additional props for start/manual setup,
       // which it reads from window.electronAPI at runtime. The orchestrator
       // hands it `isOpen` and onDismiss only.

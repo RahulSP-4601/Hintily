@@ -19,7 +19,8 @@ import { ES_GENERATED } from './i18n.es.generated';
 
 export type Lang = 'en' | 'ru' | 'zh' | 'ja' | 'es';
 
-const STORAGE_KEY = 'natively_lang';
+const STORAGE_KEY = 'hintily_lang';
+const LEGACY_STORAGE_KEY = 'natively_lang';
 const SUPPORTED_LANGS: Lang[] = ['en', 'ru', 'zh', 'ja', 'es'];
 
 function isSupportedLang(v: string | null): v is Lang {
@@ -319,12 +320,21 @@ interface LanguageContextValue {
 const LanguageContext = createContext<LanguageContextValue>({
     lang: 'en',
     setLang: () => {},
-    t: (text: string) => text,
+    t: (text: string) => applyHintilyBrand(text),
 });
+
+// Keep translation dictionaries backward-compatible while ensuring old product
+// names can never leak into user-visible translated text.
+function applyHintilyBrand(text: string): string {
+    return text
+        .replaceAll('Natively API', 'Hintily AI')
+        .replaceAll('Natively Pro', 'Hintily Pro')
+        .replaceAll('Natively', 'Hintily');
+}
 
 function readStoredLang(): Lang {
     try {
-        const v = localStorage.getItem(STORAGE_KEY);
+        const v = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
         return isSupportedLang(v) ? v : 'en';
     } catch {
         return 'en';
@@ -336,14 +346,21 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const setLang = useCallback((l: Lang) => {
         setLangState(l);
-        try { localStorage.setItem(STORAGE_KEY, l); } catch { /* ignore */ }
+        try {
+            localStorage.setItem(STORAGE_KEY, l);
+            // Keep older windows in sync during the migration period.
+            localStorage.setItem(LEGACY_STORAGE_KEY, l);
+        } catch { /* ignore */ }
     }, []);
 
     // Keep other windows (settings-popup, overlay) in sync — the `storage` event
     // fires in every OTHER same-partition renderer when one of them writes.
     useEffect(() => {
         const onStorage = (e: StorageEvent) => {
-            if (e.key === STORAGE_KEY && isSupportedLang(e.newValue)) {
+            if (
+                (e.key === STORAGE_KEY || e.key === LEGACY_STORAGE_KEY)
+                && isSupportedLang(e.newValue)
+            ) {
                 setLangState(e.newValue);
             }
         };
@@ -352,7 +369,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }, []);
 
     const t = useCallback(
-        (text: string) => (lang === 'en' ? text : (DICT[lang][text] ?? text)),
+        (text: string) => applyHintilyBrand(lang === 'en' ? text : (DICT[lang][text] ?? text)),
         [lang],
     );
 

@@ -88,18 +88,15 @@ console.log(`[upload-release] version = ${version}`);
 
 // 2. Find the signed .dmg — search both dist/ and release/ (electron-builder's
 //    `output` setting + afterAllArtifactBuild's path resolution vary by build).
-//    We build a regex because:
-//      (a) `productName` may be missing from package.json (live: only `name:"natively"`)
-//      (b) scripts/afterAllArtifactBuild.cjs hardcodes VOLNAME='Natively' so the
-//          actual filename casing is "Natively-…", not always matching productName
-//      (c) multiple architectures can ship side-by-side (universal / arm64 / x64)
-const productName = pkg.productName || pkg.name || 'natively';
+//    The signed-build hook derives the artifact prefix from build.productName
+//    and emits one explicit artifact per architecture.
+const productName = pkg.build?.productName || pkg.productName || pkg.name || 'Hintily';
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const escapedProductName = escapeRegex(productName);
+const escapedVersion = escapeRegex(version);
 const dmgRegexes = [
-  new RegExp(`^Natively-${version.replace(/\./g, '\\.')}\\.dmg$`, 'i'),
-  new RegExp(`^Natively-${version.replace(/\./g, '\\.')}-arm64\\.dmg$`, 'i'),
-  new RegExp(`^Natively-${version.replace(/\./g, '\\.')}-x64\\.dmg$`, 'i'),
-  new RegExp(`^${productName}-Setup-${version.replace(/\./g, '\\.')}\\.dmg$`, 'i'),
-  new RegExp(`^${productName}-Setup-${version.replace(/\./g, '\\.')}-arm64\\.dmg$`, 'i'),
+  new RegExp(`^${escapedProductName}-${escapedVersion}-arm64\\.dmg$`, 'i'),
+  new RegExp(`^${escapedProductName}-${escapedVersion}-x64\\.dmg$`, 'i'),
 ];
 const searchDirs = ['dist', 'release'].map((d) => path.join(repoRoot, d));
 
@@ -173,8 +170,7 @@ try {
 }
 
 // 6. Upload each .dmg. Use `copyto` (not `copy`) so the destination filename
-//    matches the source — preserves `Natively-2.8.1.dmg` / `-arm64.dmg` exactly,
-//    which is what latest-mac.yml expects for auto-updater sanity.
+//    matches the source and the public architecture-specific Hintily URLs.
 //    `--drive-root-folder-id` scopes the destination to the real target folder
 //    and bypasses any sibling folder whose name happens to look like a path.
 for (const dmg of uniqueDmgs) {

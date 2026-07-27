@@ -6,14 +6,11 @@
  */
 
 export const CHECKOUT_URLS = {
-    /** Natively Pro (lifetime/yearly) */
-    pro: 'https://checkout.dodopayments.com/buy/pdt_0NcM6Aw0IWdspbsgUeCLA',
-    /** Natively API — Standard tier */
-    apiStandard: 'https://checkout.dodopayments.com/buy/pdt_0NbFixGmD8CSeawb5qvVl',
-    /** Natively API — Pro tier */
-    apiPro: 'https://checkout.dodopayments.com/buy/pdt_0NcM6Aw0IWdspbsgUeCLA',
-    /** Natively API — Max tier */
-    apiMax: 'https://checkout.dodopayments.com/buy/pdt_0NcM7JElX4Af6LNVFS1Yf',
-    /** Natively API — Ultra tier */
-    apiUltra: 'https://checkout.dodopayments.com/buy/pdt_0NcM7rC2kAb69TFKsZnUU',
+    // Compatibility shape for the isolated legacy settings components. The old
+    // Natively products must never be opened by Hintily.
+    pro: '',
+    apiStandard: '',
+    apiPro: '',
+    apiMax: '',
+    apiUltra: '',
 } as const;

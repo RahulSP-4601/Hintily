@@ -282,14 +282,13 @@ export class CredentialsManager {
 
     public getSttProvider(): 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'natively' | 'local-whisper' {
         const provider = this.credentials.sttProvider || 'none';
-        // Self-heal: if provider is 'none' but a Natively key exists, the user is in a
-        // broken state (key cleared then re-entered via a path that skipped auto-promote,
-        // or credentials restored from backup). Silently restore to 'natively' so STT works.
-        if (provider === 'none' && this.credentials.nativelyApiKey) {
-            this.credentials.sttProvider = 'natively';
+        if (provider === 'natively') {
+            // Retain the encrypted legacy credential for possible migration,
+            // but never route audio to the inherited Natively backend.
+            this.credentials.sttProvider = 'none';
             this.saveCredentials();
-            console.log('[CredentialsManager] Self-healed sttProvider: none→natively (Natively key present)');
-            return 'natively';
+            console.log('[CredentialsManager] Disabled legacy Natively STT provider');
+            return 'none';
         }
         return provider;
     }
@@ -354,11 +353,14 @@ export class CredentialsManager {
         // the same prompt (measured), and faster output streaming — the
         // Cluely-class interactive latency target. Full Flash / Pro remain
         // user-selectable for harder problems.
-        return this.credentials.defaultModel || 'gemini-3.1-flash-lite';
+        return this.credentials.defaultModel === 'natively'
+            ? 'gemini-3.1-flash-lite'
+            : (this.credentials.defaultModel || 'gemini-3.1-flash-lite');
     }
 
     public getNativelyApiKey(): string | undefined {
-        return this.credentials.nativelyApiKey;
+        // Never expose the inherited provider credential to runtime routing.
+        return undefined;
     }
 
     public getAllCredentials(): StoredCredentials {

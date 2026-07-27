@@ -151,12 +151,12 @@ check('update-available handler is gated by isRealUpgrade', () => {
   }
 });
 
-// 7. release manifest pre-flight: release/ dir shouldn't contain a Natively.app
+// 7. Release manifest pre-flight for packaged Hintily applications.
 //    whose app-update.yml points at a channel other than "latest".
 check('packaged app-update.yml has provider=github + releaseType=release', () => {
   const candidates = [
-    path.join(repoRoot, 'release', 'mac', 'Natively.app', 'Contents', 'Resources', 'app-update.yml'),
-    path.join(repoRoot, 'release', 'mac-arm64', 'Natively.app', 'Contents', 'Resources', 'app-update.yml'),
+    path.join(repoRoot, 'release', 'mac', 'Hintily.app', 'Contents', 'Resources', 'app-update.yml'),
+    path.join(repoRoot, 'release', 'mac-arm64', 'Hintily.app', 'Contents', 'Resources', 'app-update.yml'),
   ];
   let found = false;
   for (const f of candidates) {
@@ -166,18 +166,18 @@ check('packaged app-update.yml has provider=github + releaseType=release', () =>
     if (!/provider:\s*github/.test(text)) {
       throw new Error(`${f}: provider is not github:\n${text}`);
     }
-    if (!/owner:\s*Natively-AI-assistant/.test(text)) {
-      throw new Error(`${f}: owner is not Natively-AI-assistant:\n${text}`);
+    if (!/owner:\s*RahulSP-4601/.test(text)) {
+      throw new Error(`${f}: owner is not RahulSP-4601:\n${text}`);
     }
-    if (!/repo:\s*natively-cluely-ai-assistant/.test(text)) {
-      throw new Error(`${f}: repo is not natively-cluely-ai-assistant:\n${text}`);
+    if (!/repo:\s*Hintily/.test(text)) {
+      throw new Error(`${f}: repo is not Hintily:\n${text}`);
     }
     if (!/releaseType:\s*release/.test(text)) {
       throw new Error(`${f}: releaseType is not "release":\n${text}`);
     }
   }
   if (!found) {
-    console.log('    skipped (no packaged Natively.app found in release/)');
+    console.log('    skipped (no packaged Hintily.app found in release/)');
   }
 });
 

@@ -16,6 +16,7 @@ import os from "os"
 import dns from "dns"
 import { SystemAudioHealthClassifier } from "./audio/systemAudioHealthClassifier.mjs"
 import { autoUpdater } from "electron-updater"
+import { migrateLegacyUserData } from "./migrations/userDataMigration"
 
 // Override global dns.lookup to resolve macOS system resolver issues with api.natively.software
 const originalLookup = dns.lookup;
@@ -6189,7 +6190,7 @@ export class AppState {
     trayIcon.setTemplateImage(iconToUse.endsWith('Template.png'));
 
     this.tray = new Tray(trayIcon)
-    this.tray.setToolTip('Natively') // This tooltip might also need update if we change global shortcut, but global shortcut is removed.
+    this.tray.setToolTip('Hintily')
     this.updateTrayMenu();
 
     // Double-click to show window
@@ -6207,7 +6208,7 @@ export class AppState {
     console.log('[Main] updateTrayMenu called. Screenshot Accelerator:', screenshotAccel);
 
     // Update tooltip for verification
-    this.tray.setToolTip('Natively');
+    this.tray.setToolTip('Hintily');
 
     // Helper to format accelerator for display (e.g. CommandOrControl+H -> Cmd+H)
     const formatAccel = (accel: string) => {
@@ -6227,7 +6228,7 @@ export class AppState {
 
     const contextMenu = Menu.buildFromTemplate([
       {
-        label: 'Show Natively',
+        label: 'Show Hintily',
         click: () => {
           this.centerAndShowWindow()
         }
@@ -6634,7 +6635,7 @@ export class AppState {
   }
 
   private _applyDisguise(mode: 'terminal' | 'settings' | 'activity' | 'none'): void {
-    let appName = "Natively";
+    let appName = "Hintily";
     let iconPath = "";
 
     const isWin = process.platform === 'win32';
@@ -6679,10 +6680,10 @@ export class AppState {
         break;
       case 'none':
       default:
-        appName = "Natively";
+        appName = "Hintily";
         if (isMac) {
           iconPath = app.isPackaged
-            ? path.join(process.resourcesPath, "natively.icns")
+            ? path.join(process.resourcesPath, "hintily.icns")
             : path.join(app.getAppPath(), "assets/natively.icns");
         } else if (isWin) {
           iconPath = app.isPackaged
@@ -6715,7 +6716,7 @@ export class AppState {
     // 3. Update App User Model ID (Windows Taskbar grouping)
     if (isWin) {
       // Use unique AUMID per disguise to avoid grouping with the real app
-      app.setAppUserModelId(`com.natively.assistant.${mode}`);
+      app.setAppUserModelId(`com.hintily.desktop.${mode}`);
     }
 
     // 4. Update Icons
@@ -6822,6 +6823,12 @@ async function initializeApp() {
     return;
   }
 
+  // The packaged app is also registered through electron-builder's protocols
+  // metadata. This runtime call repairs registration after an in-place update.
+  if (app.isPackaged) {
+    app.setAsDefaultProtocolClient('hintily');
+  }
+
   // When a duplicate launch is attempted (e.g. user invokes Spotlight again
   // while Natively is running), focus and recenter the existing window so the
   // launch is visibly handled instead of silently absorbed.
@@ -6871,6 +6878,18 @@ async function initializeApp() {
   // 2. Wait for app to be ready
   logStartupPhase('before-app-whenReady');
   await app.whenReady()
+  if (app.isPackaged) {
+    try {
+      const migration = migrateLegacyUserData(app.getPath('appData'), app.getPath('userData'));
+      console.log('[HintilyMigration] User data:', migration.status, {
+        copiedEntries: migration.copiedEntries ?? 0,
+      });
+    } catch (error) {
+      // Never replace or delete the legacy directory. A failed copy is retried
+      // next launch because the completion marker is written only on success.
+      console.error('[HintilyMigration] User-data migration failed; legacy data was left intact:', error);
+    }
+  }
   nativeOomTrace.initialize()
   nativeOomTrace.record('app-ready', {
     pid: process.pid,

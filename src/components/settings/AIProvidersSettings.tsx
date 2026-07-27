@@ -4,6 +4,7 @@ import { Plus, Trash2, Edit2, AlertCircle, CheckCircle, Save, ChevronDown, Check
 import { CODEX_CLI_MODEL, CODEX_CLI_MODEL_PRESETS, codexCliSelectorId, STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { validateCurl } from '../../lib/curl-validator';
 import { ProviderCard } from './ProviderCard';
+import { LEGACY_NATIVELY_COMMERCE_ENABLED } from '../../config/brand';
 
 const CODEX_SERVICE_TIERS = ['default', 'fast', 'flex'] as const;
 // Must mirror CodexCliService.CODEX_MODEL_REASONING_EFFORTS in
@@ -373,7 +374,7 @@ export const AIProvidersSettings: React.FC<AIProvidersSettingsProps> = ({
     const buildAvailableModelOptions = (): { id: string; name: string }[] => {
         const opts: { id: string; name: string }[] = [];
 
-        if (hasStoredKey.natively) {
+        if (LEGACY_NATIVELY_COMMERCE_ENABLED && hasStoredKey.natively) {
             opts.push({ id: 'natively', name: 'Natively API' });
         }
 

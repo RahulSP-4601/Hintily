@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ChevronDown, Check, Cloud, Terminal, Monitor, Server, Plus } from 'lucide-react';
 import { getCodexCliModelDisplayName, STANDARD_CLOUD_MODELS, prettifyModelId } from '../../utils/modelUtils';
 import { useT } from '../../i18n';
+import { LEGACY_NATIVELY_COMMERCE_ENABLED } from '../../config/brand';
 
 interface ModelSelectorProps {
     currentModel: string;
@@ -53,8 +54,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ currentModel, onSe
                 const creds = await window.electronAPI?.getStoredCredentials?.();
                 const cModels: { id: string; name: string; desc: string; provider: string }[] = [];
 
-                if (creds?.hasNativelyKey) {
-                    cModels.push({ id: 'natively', name: 'Natively API', desc: t('Managed AI • Fast execution'), provider: 'natively' });
+                if (LEGACY_NATIVELY_COMMERCE_ENABLED && creds?.hasNativelyKey) {
+                    cModels.push({ id: 'natively', name: 'Hintily AI', desc: t('Managed AI • Fast execution'), provider: 'natively' });
                 }
                 for (const [prov, cfg] of Object.entries(STANDARD_CLOUD_MODELS)) {
                     if (!cfg.hasKeyCheck(creds)) continue;

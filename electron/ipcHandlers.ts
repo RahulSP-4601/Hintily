@@ -20,6 +20,7 @@ import { ProviderStatusRegistry } from './services/ProviderStatusRegistry';
 import { SkillsManager } from './services/SkillsManager';
 import { SAFE_DOCUMENT_EXTENSIONS } from './services/SafeDocumentTextExtractor';
 import { DEFAULT_BUILTIN_SKILL_IDS, type SkillUploadPayload } from './services/skills/SkillValidator';
+import { HintilyAuthService } from './services/auth/HintilyAuthService';
 
 import { TRIAL_SENTINEL_KEY, DOM_CONTEXT_MAX_CHARS } from './config/constants';
 import { AI_RESPONSE_LANGUAGES, RECOGNITION_LANGUAGES } from './config/languages';
@@ -176,6 +177,27 @@ export function initializeIpcHandlers(appState: AppState): void {
     ipcMain.removeHandler(channel);
     ipcMain.handle(channel, listener);
   };
+
+  const hintilyAuth = HintilyAuthService.getInstance();
+  // Account operations must wait for keychain restoration to settle. Without
+  // this barrier, a fast sign-out can delete the stored session while
+  // initialize() is still restoring it, after which initialize() writes the
+  // credentials back and signs the user in again.
+  const hintilyAuthReady = hintilyAuth.initialize();
+  const afterHintilyAuthReady = async <T>(operation: () => Promise<T> | T): Promise<T> => {
+    await hintilyAuthReady;
+    return operation();
+  };
+  safeHandle('hintily-auth:get-status', () =>
+    afterHintilyAuthReady(() => hintilyAuth.getStatus()));
+  safeHandle('hintily-auth:sign-in-google', () =>
+    afterHintilyAuthReady(() => hintilyAuth.signInWithGoogle()));
+  safeHandle('hintily-auth:refresh', () =>
+    afterHintilyAuthReady(() => hintilyAuth.refresh()));
+  safeHandle('hintily-auth:sign-out', () =>
+    afterHintilyAuthReady(() => hintilyAuth.signOut()));
+  safeHandle('hintily-auth:delete-account', () =>
+    afterHintilyAuthReady(() => hintilyAuth.deleteAccount()));
 
   const safeOn = (
     channel: string,
@@ -6215,9 +6237,9 @@ export function initializeIpcHandlers(appState: AppState): void {
         // prefill it (unlike API keys, which are only reported as booleans).
         litellmBaseURL: creds.litellmBaseURL || null,
         litellmMaxTokens: creds.litellmMaxTokens || null,
-        hasNativelyKey: hasKey(creds.nativelyApiKey),
+        hasNativelyKey: false,
         googleServiceAccountPath: creds.googleServiceAccountPath || null,
-        sttProvider: creds.sttProvider || 'none',
+        sttProvider: CredentialsManager.getInstance().getSttProvider(),
         groqSttModel: creds.groqSttModel || 'whisper-large-v3-turbo',
         hasSttGroqKey: hasKey(creds.groqSttApiKey),
         hasSttOpenaiKey: hasKey(creds.openAiSttApiKey),

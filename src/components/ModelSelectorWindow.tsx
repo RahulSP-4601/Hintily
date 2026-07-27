@@ -2,6 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import { CODEX_CLI_MODEL, CODEX_CLI_MODEL_PRESETS, codexCliSelectorId, getCodexCliModelDisplayName, STANDARD_CLOUD_MODELS, prettifyModelId } from '../utils/modelUtils';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
+import { LEGACY_NATIVELY_COMMERCE_ENABLED } from '../config/brand';
 
 // Define Model Types
 interface ModelOption {
@@ -91,8 +92,8 @@ const ModelSelectorWindow = () => {
                 // Build the list
                 const models: ModelOption[] = [];
 
-                if (creds?.hasNativelyKey) {
-                    models.push({ id: 'natively', name: 'Natively API', type: 'cloud', provider: 'natively' });
+                if (LEGACY_NATIVELY_COMMERCE_ENABLED && creds?.hasNativelyKey) {
+                    models.push({ id: 'natively', name: 'Hintily AI', type: 'cloud', provider: 'natively' });
                 }
 
                 // Cloud Models — standard models + unique preferred models

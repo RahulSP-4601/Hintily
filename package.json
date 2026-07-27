@@ -1,9 +1,11 @@
 {
-  "name": "natively",
+  "name": "hintily",
   "version": "2.8.4",
   "main": "dist-electron/electron/main.js",
-  "description": "Natively is a meeting notes app that uses AI to generate notes from your meetings.",
+  "description": "Hintily is a privacy-focused interview and meeting assistant.",
   "scripts": {
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "prepare:hintily-config": "node scripts/write-hintily-public-config.mjs",
     "clean": "rimraf dist dist-electron",
     "dev": "vite",
     "build": "npm run clean && tsc && vite build",
@@ -17,8 +19,8 @@
     "electron:dev": "npm run build && npm run build:electron && cross-env NODE_ENV=development electron .",
     "electron:build": "npm run build:electron && cross-env NODE_ENV=production electron .",
     "app:dev": "concurrently --kill-others --kill-signal SIGKILL \"npm run dev -- --port 5180 --strictPort\" \"wait-on http://localhost:5180 && npm run electron:dev\"",
-    "app:build": "npm run build && npm run typecheck:electron && npm run build:electron && cross-env NATIVELY_BUILD_ALL_MAC_ARCHES=1 npm run build:native && node scripts/ensure-sharp-mac-deps.js && node scripts/ensure-sqlite-vec.js && npm run verify:packaged-local-assets && (electron-builder; code=$?; node scripts/rebuild-native-electron.js; exit $code)",
-    "app:build:signed": "npm run build && npm run typecheck:electron && npm run build:electron && cross-env NATIVELY_BUILD_ALL_MAC_ARCHES=1 npm run build:native && node scripts/ensure-sharp-mac-deps.js && node scripts/ensure-sqlite-vec.js && npm run verify:packaged-local-assets && (electron-builder --config electron-builder.signed.cjs; code=$?; node scripts/rebuild-native-electron.js; exit $code)",
+    "app:build": "npm run build && npm run typecheck:electron && npm run build:electron && npm run prepare:hintily-config && cross-env NATIVELY_BUILD_ALL_MAC_ARCHES=1 npm run build:native && node scripts/ensure-sharp-mac-deps.js && node scripts/ensure-sqlite-vec.js && npm run verify:packaged-local-assets && (electron-builder; code=$?; node scripts/rebuild-native-electron.js; exit $code)",
+    "app:build:signed": "npm run build && npm run typecheck:electron && npm run build:electron && npm run prepare:hintily-config && cross-env NATIVELY_BUILD_ALL_MAC_ARCHES=1 npm run build:native && node scripts/ensure-sharp-mac-deps.js && node scripts/ensure-sqlite-vec.js && npm run verify:packaged-local-assets && (electron-builder --config electron-builder.signed.cjs; code=$?; node scripts/rebuild-native-electron.js; exit $code)",
     "watch": "tsc -p electron/tsconfig.json --watch",
     "start": "npm run app:dev",
     "dist": "npm run app:build",
@@ -91,9 +93,17 @@
   },
   "build": {
     "generateUpdatesFilesForAllChannels": true,
-    "appId": "com.electron.meeting-notes",
+    "appId": "com.hintily.desktop",
     "afterPack": "./scripts/ad-hoc-sign.js",
-    "productName": "Natively",
+    "productName": "Hintily",
+    "protocols": [
+      {
+        "name": "Hintily",
+        "schemes": [
+          "hintily"
+        ]
+      }
+    ],
     "files": [
       "dist",
       "dist-electron",
@@ -142,7 +152,11 @@
       },
       {
         "from": "assets/natively.icns",
-        "to": "natively.icns"
+        "to": "hintily.icns"
+      },
+      {
+        "from": "build/hintily.public-config.json",
+        "to": "hintily.public-config.json"
       },
       {
         "from": "resources/models/",
@@ -171,9 +185,9 @@
       "identity": null,
       "hardenedRuntime": false,
       "extendInfo": {
-        "NSScreenCaptureUsageDescription": "Natively needs Screen Recording permission to capture system audio for meeting transcription.",
-        "NSMicrophoneUsageDescription": "Natively needs microphone access to transcribe your voice during meetings.",
-        "NSAudioCaptureUsageDescription": "Natively needs system audio access to transcribe meeting audio."
+        "NSScreenCaptureUsageDescription": "Hintily needs Screen Recording permission to capture system audio for meeting transcription.",
+        "NSMicrophoneUsageDescription": "Hintily needs microphone access to transcribe your voice during meetings.",
+        "NSAudioCaptureUsageDescription": "Hintily needs system audio access to transcribe meeting audio."
       }
     },
     "win": {
@@ -223,8 +237,8 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "Natively-AI-assistant",
-        "repo": "natively-cluely-ai-assistant",
+        "owner": "RahulSP-4601",
+        "repo": "Hintily",
         "releaseType": "release"
       }
     ],
@@ -286,6 +300,7 @@
     "@huggingface/transformers": "^3.8.1",
     "@radix-ui/react-dialog": "^1.1.2",
     "@radix-ui/react-toast": "^1.2.2",
+    "@supabase/supabase-js": "^2.109.0",
     "@tanstack/react-query": "^5.100.10",
     "@tavily/core": "^0.7.2",
     "@types/keytar": "^4.4.0",
