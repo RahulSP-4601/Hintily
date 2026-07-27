@@ -23,6 +23,9 @@ const {
   extractSafeDocumentText,
   SAFE_DOCUMENT_EXTENSIONS,
   SAFE_DOCUMENT_MAX_BYTES,
+  extractSafeResumeDocument,
+  SAFE_RESUME_EXTENSIONS,
+  SAFE_RESUME_MAX_BYTES,
 } = await import(moduleUrl);
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'natively-safe-document-'));
@@ -41,6 +44,28 @@ test('declares the complete shared Modes / Profile document format contract', ()
     ['.txt', '.md', '.markdown', '.json', '.csv', '.tsv', '.xml', '.html', '.htm', '.log', '.pdf', '.docx'],
   );
   assert.equal(SAFE_DOCUMENT_MAX_BYTES, 50 * 1024 * 1024);
+});
+
+test('resume extraction is restricted to PDF, DOCX, and TXT with a 10 MB cap', () => {
+  assert.deepEqual([...SAFE_RESUME_EXTENSIONS], ['.pdf', '.docx', '.txt']);
+  assert.equal(SAFE_RESUME_MAX_BYTES, 10 * 1024 * 1024);
+});
+
+test('normalizes safe TXT resumes and returns a bounded preview and hash', async () => {
+  const resume = createFixture('candidate.txt', 'Sarah Chen\r\n\r\nSenior   Software Engineer\r\nTypeScript');
+  const result = await extractSafeResumeDocument(resume);
+  assert.equal(result.normalizedContent, 'Sarah Chen\n\nSenior Software Engineer\nTypeScript');
+  assert.equal(result.preview, result.normalizedContent);
+  assert.match(result.binarySha256, /^[a-f0-9]{64}$/);
+});
+
+test('resume extraction rejects misleading signatures and degenerate text', async () => {
+  const fakePdf = createFixture('fake.pdf', 'not a pdf despite extension');
+  const fakeDocx = createFixture('fake.docx', 'not a zip despite extension');
+  const sparse = createFixture('sparse.txt', 'A B');
+  await assert.rejects(() => extractSafeResumeDocument(fakePdf), /signature does not match PDF/);
+  await assert.rejects(() => extractSafeResumeDocument(fakeDocx), /signature does not match DOCX/);
+  await assert.rejects(() => extractSafeResumeDocument(sparse), /too little readable text/);
 });
 
 test('extracts every plain-text document format without changing its content', async () => {

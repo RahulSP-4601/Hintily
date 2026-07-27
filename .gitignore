@@ -451,5 +451,6 @@ docs/*
 !docs/VISION_MODEL_BENCHMARK.md
 !docs/phases.md
 !docs/RECOVERY.md
+!docs/PHASES_5_10_LOCAL_TEST.md
 build/hintily.public-config.json
 benchmark-results/

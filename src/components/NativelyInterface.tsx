@@ -2027,6 +2027,16 @@ const NativelyInterface: React.FC<NativelyInterfaceProps> = ({
   }, [audioNotice]);
 
   useEffect(() => {
+    const unsub = window.electronAPI?.onHintilyTimeWarning?.(({ remainingSeconds }) => {
+      const minutes = Math.floor(Math.max(0, remainingSeconds) / 60);
+      const seconds = Math.max(0, remainingSeconds) % 60;
+      setAudioNotice(`Hintily managed session time remaining: ${minutes}:${String(seconds).padStart(2, '0')}`);
+      setIsExpanded(true);
+    });
+    return () => unsub?.();
+  }, []);
+
+  useEffect(() => {
     const unsub = window.electronAPI?.onAudioCaptureFailed?.((payload) => {
       // Surface both 'system' and 'mic' failures. Earlier code dropped the
       // 'mic' channel under the assumption that STT status would surface

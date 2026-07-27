@@ -8,15 +8,28 @@
  */
 
 import { EventEmitter } from 'events';
+import { randomUUID } from 'node:crypto';
 import { RECOGNITION_LANGUAGES } from '../config/languages';
 
 const RECONNECT_BASE_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
 const RECONNECT_MAX_ATTEMPTS = 10;
 const KEEPALIVE_INTERVAL_MS = 8000;
+const safeProviderError = (error: any): { name: string; status?: number; code?: string } => ({
+    name: typeof error?.name === 'string' ? error.name.slice(0, 80) : 'DeepgramError',
+    ...(Number.isInteger(error?.status) ? { status: error.status } : {}),
+    ...(typeof error?.code === 'string' ? { code: error.code.slice(0, 80) } : {}),
+});
+type DeepgramCredential = string | ((leaseOwnerId: string) => Promise<string | {
+    token: string;
+    websocketUrl: string;
+    sessionId: string;
+    channel: 'interviewer' | 'user';
+    leaseOwnerId: string;
+}>);
 
 export class DeepgramStreamingSTT extends EventEmitter {
-    private apiKey: string;
+    private credential: DeepgramCredential;
     private live: any = null;
     private isActive = false;
     private shouldReconnect = false;
@@ -39,15 +52,17 @@ export class DeepgramStreamingSTT extends EventEmitter {
     private keepAliveInterval: NodeJS.Timeout | null = null;
     private buffer: Buffer[] = [];
     private isConnecting = false;
+    private connectionGeneration = 0;
+    private readonly leaseOwnerId = randomUUID();
     // Opt-in provider diarization (#3). When on, Deepgram returns a per-word `speaker`
     // index; we surface it as a canonical speakerId on the transcript event so multiple
     // remote speakers can be distinguished. Default OFF — must never destabilize the
     // realtime path for users who don't enable it.
     private diarize = false;
 
-    constructor(apiKey: string) {
+    constructor(apiKey: DeepgramCredential) {
         super();
-        this.apiKey = apiKey;
+        this.credential = apiKey;
     }
 
     /** Enable/disable provider diarization. Restarts the stream if active (it's a connect param). */
@@ -92,7 +107,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     private restartStream(): void {
         console.log('[DeepgramStreaming] Restarting due to config change...');
-        this.stop();
+        this.stopConnection(false);
         this.start();
     }
 
@@ -105,6 +120,12 @@ export class DeepgramStreamingSTT extends EventEmitter {
     }
 
     public stop(): void {
+        this.stopConnection(true);
+    }
+
+    private stopConnection(permanent: boolean): void {
+        const wasRunning = this.isActive || this.isConnecting || this.isOpen || Boolean(this.live);
+        this.connectionGeneration++;
         this.shouldReconnect = false;
         this.clearTimers();
 
@@ -121,6 +142,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
         this.isConnecting = false;
         this.isOpen = false;
         this.buffer = [];
+        if (wasRunning) this.emit('stopped', { permanent });
         console.log('[DeepgramStreaming] Stopped');
     }
 
@@ -154,18 +176,43 @@ export class DeepgramStreamingSTT extends EventEmitter {
         }
     }
 
-    private connect(): void {
+    private async connect(): Promise<void> {
         if (this.isConnecting) return;
         this.isConnecting = true;
+        const generation = ++this.connectionGeneration;
 
         console.log(`[DeepgramStreaming] Connecting (rate=${this.sampleRate}, ch=${this.numChannels}, lang=${this.languageCode})...`);
 
         try {
             const { createClient, LiveTranscriptionEvents } = require('@deepgram/sdk');
 
-            const deepgram = createClient(this.apiKey);
+            const resolvedCredential = typeof this.credential === 'function'
+                ? await this.credential(this.leaseOwnerId)
+                : this.credential;
+            const token = typeof resolvedCredential === 'string'
+                ? resolvedCredential
+                : resolvedCredential.token;
+            if (!token) throw new Error('Deepgram authorization was not returned');
+            if (!this.shouldReconnect || generation !== this.connectionGeneration) {
+                this.isConnecting = false;
+                return;
+            }
+            const managed = typeof resolvedCredential === 'string' ? null : resolvedCredential;
+            const deepgram = managed
+                ? createClient(token, {
+                    listen: {
+                        websocket: {
+                            client: require('ws'),
+                            options: {
+                                url: managed.websocketUrl,
+                                _nodeOnlyHeaders: { Authorization: `Bearer ${token}` },
+                            },
+                        },
+                    },
+                })
+                : createClient(token);
 
-            this.live = deepgram.listen.live({
+            const live = deepgram.listen.live({
                 model: 'nova-3',
                 language: this.languageCode,
                 smart_format: true,
@@ -176,17 +223,28 @@ export class DeepgramStreamingSTT extends EventEmitter {
                 endpointing: 300,
                 utterance_end_ms: 1000,
                 vad_events: true,
+                ...(managed ? { hintily_session_id: managed.sessionId } : {}),
+                ...(managed ? { hintily_channel: managed.channel } : {}),
+                ...(managed ? { hintily_lease_owner_id: managed.leaseOwnerId } : {}),
                 // Opt-in: ask Deepgram to tag each word with a speaker index.
                 ...(this.diarize ? { diarize: true } : {}),
             });
+            if (!this.shouldReconnect || generation !== this.connectionGeneration) {
+                try { live.requestClose(); } catch { /* superseded before setup */ }
+                return;
+            }
+            this.live = live;
 
-            this.live.on(LiveTranscriptionEvents.Open, () => {
+            live.on(LiveTranscriptionEvents.Open, () => {
+                if (generation !== this.connectionGeneration || this.live !== live) return;
                 this.isConnecting = false;
                 this.isOpen = true;
                 console.log('[DeepgramStreaming] Connected');
+                this.emit('connected');
 
                 // Register Transcript inside Open per SDK README pattern
-                this.live.on(LiveTranscriptionEvents.Transcript, (data: any) => {
+                live.on(LiveTranscriptionEvents.Transcript, (data: any) => {
+                    if (generation !== this.connectionGeneration || this.live !== live) return;
                     try {
                         const alt = data.channel?.alternatives?.[0];
                         const transcript = alt?.transcript;
@@ -208,15 +266,19 @@ export class DeepgramStreamingSTT extends EventEmitter {
                             confidence: alt?.confidence ?? 1.0,
                             ...(speakerId ? { speakerId } : {}),
                         });
-                    } catch (err) {
-                        console.error('[DeepgramStreaming] Parse error:', err);
+                    } catch {
+                        console.error('[DeepgramStreaming] Could not parse a transcript event');
                     }
+                });
+                live.on(LiveTranscriptionEvents.Unhandled, (data: any) => {
+                    if (generation !== this.connectionGeneration || this.live !== live) return;
+                    if (data?.type === 'HintilyUsage') this.emit('usage', data);
                 });
 
                 // Flush buffered audio
                 const buffered = this.buffer.splice(0);
                 for (const chunk of buffered) {
-                    try { this.live?.send(chunk); } catch { }
+                    try { live.send(chunk); } catch { }
                 }
                 if (buffered.length > 0) {
                     console.log(`[DeepgramStreaming] Flushed ${buffered.length} buffered chunks`);
@@ -224,8 +286,8 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
                 // SDK keepAlive() every 8s prevents idle timeout (per Deepgram docs)
                 this.keepAliveInterval = setInterval(() => {
-                    if (this.isOpen) {
-                        try { this.live?.keepAlive(); } catch { }
+                    if (this.isOpen && generation === this.connectionGeneration && this.live === live) {
+                        try { live.keepAlive(); } catch { }
                     }
                 }, KEEPALIVE_INTERVAL_MS);
 
@@ -240,18 +302,28 @@ export class DeepgramStreamingSTT extends EventEmitter {
                 }, 5000);
             });
 
-            this.live.on(LiveTranscriptionEvents.Error, (err: any) => {
-                console.error('[DeepgramStreaming] Error:', err);
-                this.emit('error', err instanceof Error ? err : new Error(String(err)));
+            live.on(LiveTranscriptionEvents.Error, (err: any) => {
+                if (generation !== this.connectionGeneration || this.live !== live) return;
+                console.error('[DeepgramStreaming] Provider error:', safeProviderError(err));
+                const status = Number(err?.status || 0);
+                const message = status === 401 || status === 403
+                    ? 'Hintily transcription authorization expired. Reconnecting…'
+                    : status === 429
+                        ? 'Hintily transcription is temporarily busy. Reconnecting…'
+                        : 'Hintily transcription connection was interrupted.';
+                this.emit('error', new Error(message));
             });
 
-            this.live.on(LiveTranscriptionEvents.Close, (event: any) => {
+            live.on(LiveTranscriptionEvents.Close, (event: any) => {
+                if (generation !== this.connectionGeneration || this.live !== live) return;
                 const code = event?.code ?? 'unknown';
                 const reason = event?.reason || '(empty)';
                 console.log(`[DeepgramStreaming] Closed (code=${code}, reason=${reason})`);
 
                 this.isOpen = false;
                 this.isConnecting = false;
+                this.live = null;
+                this.emit('disconnected');
                 this.clearTimers();
 
                 if (this.shouldReconnect && code !== 1000) {
@@ -260,7 +332,8 @@ export class DeepgramStreamingSTT extends EventEmitter {
             });
 
         } catch (err: any) {
-            console.error('[DeepgramStreaming] Initialization error:', err?.message);
+            console.error('[DeepgramStreaming] Initialization error:', safeProviderError(err));
+            if (generation !== this.connectionGeneration) return;
             this.isConnecting = false;
             if (this.shouldReconnect) this.scheduleReconnect();
         }

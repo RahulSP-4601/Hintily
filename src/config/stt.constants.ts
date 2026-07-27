@@ -3,7 +3,7 @@
  * Configuration for STT providers (Google gRPC, REST, WebSocket)
  */
 
-export type SttProviderId = 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'natively';
+export type SttProviderId = 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'hintily' | 'natively';
 
 export interface SttProviderConfig {
     id: SttProviderId;
@@ -123,9 +123,18 @@ export const STT_PROVIDERS: Record<SttProviderId, SttProviderConfig> = {
         authHeader: () => ({}),
         responseContentPath: '',
     },
+    hintily: {
+        id: 'hintily',
+        name: 'Hintily Managed',
+        description: 'Managed two-channel transcription with included session time',
+        endpoint: '',
+        model: 'nova-3',
+        uploadType: 'websocket',
+        authHeader: () => ({}),
+        responseContentPath: '',
+    },
 };
 
 export const STT_PROVIDER_OPTIONS = Object.values(STT_PROVIDERS);
 
 export const DEFAULT_STT_PROVIDER: SttProviderId = 'google';
-

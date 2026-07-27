@@ -21,6 +21,8 @@ import { SkillsManager } from './services/SkillsManager';
 import { SAFE_DOCUMENT_EXTENSIONS } from './services/SafeDocumentTextExtractor';
 import { DEFAULT_BUILTIN_SKILL_IDS, type SkillUploadPayload } from './services/skills/SkillValidator';
 import { HintilyAuthService } from './services/auth/HintilyAuthService';
+import { HintilyBusinessService } from './services/business/HintilyBusinessService';
+import { HintilyManagedSession } from './services/business/HintilyManagedSession';
 
 import { TRIAL_SENTINEL_KEY, DOM_CONTEXT_MAX_CHARS } from './config/constants';
 import { AI_RESPONSE_LANGUAGES, RECOGNITION_LANGUAGES } from './config/languages';
@@ -179,6 +181,8 @@ export function initializeIpcHandlers(appState: AppState): void {
   };
 
   const hintilyAuth = HintilyAuthService.getInstance();
+  const hintilyBusiness = HintilyBusinessService.getInstance();
+  const hintilyUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   // Account operations must wait for keychain restoration to settle. Without
   // this barrier, a fast sign-out can delete the stored session while
   // initialize() is still restoring it, after which initialize() writes the
@@ -195,10 +199,53 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('hintily-auth:refresh', () =>
     afterHintilyAuthReady(() => hintilyAuth.refresh()));
   safeHandle('hintily-auth:sign-out', () =>
-    afterHintilyAuthReady(() => hintilyAuth.signOut()));
+    afterHintilyAuthReady(async () => {
+      await HintilyManagedSession.getInstance().stopForAuthChange('signed_out')
+        .catch((): void => undefined);
+      return hintilyAuth.signOut();
+    }));
   safeHandle('hintily-auth:delete-account', () =>
-    afterHintilyAuthReady(() => hintilyAuth.deleteAccount()));
-
+    afterHintilyAuthReady(async () => {
+      await HintilyManagedSession.getInstance().stopForAuthChange('account_deleted')
+        .catch((): void => undefined);
+      return hintilyAuth.deleteAccount();
+    }));
+  safeHandle('hintily-business:ensure-trial', () =>
+    afterHintilyAuthReady(() => hintilyBusiness.ensureTrial()));
+  safeHandle('hintily-business:get-state', () =>
+    afterHintilyAuthReady(() => hintilyBusiness.getAccountState()));
+  safeHandle('hintily-business:authorize-session', (_, clientSessionId: unknown) =>
+    afterHintilyAuthReady(() => typeof clientSessionId === 'string' && hintilyUuid.test(clientSessionId)
+      ? hintilyBusiness.authorizeSession(clientSessionId)
+      : { ok: false as const, error: 'invalid_client_session_id' }));
+  safeHandle('hintily-business:activate-session', (_, sessionId: unknown) =>
+    afterHintilyAuthReady(() => typeof sessionId === 'string' && hintilyUuid.test(sessionId)
+      ? hintilyBusiness.activateSession(sessionId)
+      : { ok: false as const, error: 'invalid_session_id' }));
+  safeHandle('hintily-business:heartbeat', (_, input: unknown) =>
+    afterHintilyAuthReady(() => {
+      const value = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+      return typeof value.sessionId === 'string' && hintilyUuid.test(value.sessionId)
+        && Number.isInteger(value.sequenceNo) && Number(value.sequenceNo) >= 0
+        && Number.isInteger(value.activeSeconds) && Number(value.activeSeconds) >= 0
+        && Number(value.activeSeconds) <= 300
+        ? hintilyBusiness.heartbeat(
+            value.sessionId, Number(value.sequenceNo), Number(value.activeSeconds),
+          )
+        : { ok: false as const, error: 'invalid_heartbeat' };
+    }));
+  safeHandle('hintily-business:complete-session', (_, input: unknown) =>
+    afterHintilyAuthReady(() => {
+      const value = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+      return typeof value.sessionId === 'string' && hintilyUuid.test(value.sessionId)
+        && (value.failureCode == null || typeof value.failureCode === 'string')
+        ? hintilyBusiness.completeSession(value.sessionId, String(value.failureCode || '').slice(0, 80))
+        : { ok: false as const, error: 'invalid_session_completion' };
+    }));
+  safeHandle('hintily-business:create-checkout', (_, productCode: unknown) =>
+    afterHintilyAuthReady(() => typeof productCode === 'string' && /^[a-z0-9_-]{2,60}$/.test(productCode)
+      ? hintilyBusiness.createCheckout(productCode)
+      : { ok: false as const, error: 'invalid_product_code' }));
   const safeOn = (
     channel: string,
     listener: (event: any, ...args: any[]) => void,
@@ -6371,24 +6418,45 @@ export function initializeIpcHandlers(appState: AppState): void {
         | 'azure'
         | 'ibmwatson'
         | 'soniox'
+        | 'hintily'
         | 'natively'
         | 'local-whisper',
     ) => {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      const previousProvider = CredentialsManager.getInstance().getSttProvider();
+      const managedSession = HintilyManagedSession.getInstance();
+      const needsManagedAuthorization =
+        provider === 'hintily' &&
+        appState.getIsMeetingActive() &&
+        !managedSession.activeSessionId;
+      let managedSessionAuthorized = false;
+      let providerChanged = false;
       try {
-        const { CredentialsManager } = require('./services/CredentialsManager');
+        if (needsManagedAuthorization) {
+          await managedSession.authorize();
+          managedSessionAuthorized = true;
+        }
         const persisted = CredentialsManager.getInstance().setSttProvider(provider);
+        providerChanged = true;
 
         // Branch on the real write result (mirrors the STT-key pattern at
         // sttKeyPersistenceWarning). Without this, a disk-full/EACCES on the
         // provider-save would silently leave the user on the previous provider
         // after restart — same false-Saved bug class f2dc18c closed for keys.
         if (!persisted) {
+          CredentialsManager.getInstance().setSttProvider(previousProvider);
+          if (managedSessionAuthorized) {
+            await managedSession.stop('provider_save_failed');
+          }
           CredentialsManager.getInstance().emitStorageStatusDiagnostic('stt_save_failed');
           return { success: false, error: sttPersistError };
         }
 
         // Reconfigure the audio pipeline to use the new STT provider
         await appState.reconfigureSttProvider();
+        if (previousProvider === 'hintily' && provider !== 'hintily') {
+          await HintilyManagedSession.getInstance().stop();
+        }
 
         // Notify all windows so the settings UI reflects the change immediately
         BrowserWindow.getAllWindows().forEach((win) => {
@@ -6398,6 +6466,21 @@ export function initializeIpcHandlers(appState: AppState): void {
         return { success: true };
       } catch (error: any) {
         console.error('Error setting STT provider:', error);
+        if (providerChanged) {
+          CredentialsManager.getInstance().setSttProvider(previousProvider);
+        }
+        if (managedSessionAuthorized) {
+          await managedSession.stop('provider_reconfigure_failed')
+            .catch((): void => undefined);
+        }
+        if (providerChanged) {
+          await appState.reconfigureSttProvider().catch((rollbackError: unknown) => {
+            console.error(
+              'Error restoring previous STT provider:',
+              rollbackError instanceof Error ? rollbackError.message : 'unknown_error',
+            );
+          });
+        }
         return { success: false, error: error.message };
       }
     },
@@ -7606,9 +7689,14 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('start-meeting', async (event, metadata?: any) => {
     try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      if (CredentialsManager.getInstance().getSttProvider() === 'hintily') {
+        await HintilyManagedSession.getInstance().authorize();
+      }
       await appState.startMeeting(metadata);
       return { success: true };
     } catch (error: any) {
+      await HintilyManagedSession.getInstance().stop('meeting_start_failed').catch((): void => undefined);
       console.error('Error starting meeting:', error);
       // Forward the structured error code (e.g. 'mic-permission-denied') so the
       // renderer can surface a recoverable permissions prompt rather than a
@@ -7620,8 +7708,10 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('end-meeting', async () => {
     try {
       await appState.endMeeting();
+      await HintilyManagedSession.getInstance().stop();
       return { success: true };
     } catch (error: any) {
+      await HintilyManagedSession.getInstance().stop('meeting_stop_failed').catch((): void => undefined);
       console.error('Error ending meeting:', error);
       return { success: false, error: error.message };
     }
@@ -9045,20 +9135,53 @@ export function initializeIpcHandlers(appState: AppState): void {
         console.warn('[IPC] profile:upload-resume rejected: path was not produced by profile:select-file or has expired.');
         return { success: false, error: 'Please re-select the resume file.' };
       }
-      console.log(`[IPC] profile:upload-resume called with: ${resolvedPath}`);
-      const orchestrator = appState.getKnowledgeOrchestrator();
-      if (!orchestrator) {
-        return {
-          success: false,
-          error: 'Knowledge engine not initialized. Please ensure API keys are configured.',
-        };
-      }
-      const { DocType } = require('../premium/electron/knowledge/types');
-      const result = await orchestrator.ingestDocument(resolvedPath, DocType.RESUME);
-      if (!result?.success && path.extname(resolvedPath).toLowerCase() === '.doc') {
-        return { success: false, error: 'Legacy Word .doc files are not supported. Save the file as .docx and upload it again.' };
-      }
-      if (result?.success) {
+      const {
+        extractSafeResumeDocument,
+        SAFE_RESUME_MAX_BYTES,
+      } = require('./services/SafeDocumentTextExtractor') as typeof import('./services/SafeDocumentTextExtractor');
+      const resumeTempDir = await fs.promises.mkdtemp(
+        path.join(app.getPath('temp'), 'hintily-resume-'),
+      );
+      const immutableResumePath = path.join(resumeTempDir, path.basename(resolvedPath));
+      try {
+        const noFollowFlag = typeof fs.constants.O_NOFOLLOW === 'number'
+          ? fs.constants.O_NOFOLLOW
+          : 0;
+        const sourceHandle = await fs.promises.open(
+          resolvedPath,
+          fs.constants.O_RDONLY | noFollowFlag,
+        );
+        try {
+          const sourceStats = await sourceHandle.stat();
+          if (!sourceStats.isFile()) {
+            throw new Error('The selected resume must be a regular file.');
+          }
+          if (sourceStats.size > SAFE_RESUME_MAX_BYTES) {
+            throw new Error('The selected resume is larger than the 10 MB limit.');
+          }
+          const immutableBytes = await sourceHandle.readFile();
+          await fs.promises.writeFile(immutableResumePath, immutableBytes, {
+            flag: 'wx',
+            mode: 0o600,
+          });
+        } finally {
+          await sourceHandle.close();
+        }
+
+        const extraction = await extractSafeResumeDocument(immutableResumePath);
+        const orchestrator = appState.getKnowledgeOrchestrator();
+        if (!orchestrator) {
+          return {
+            success: false,
+            error: 'Knowledge engine not initialized. Please ensure API keys are configured.',
+          };
+        }
+        const { DocType } = require('../premium/electron/knowledge/types');
+        const result = await orchestrator.ingestDocument(immutableResumePath, DocType.RESUME);
+        if (!result?.success && path.extname(immutableResumePath).toLowerCase() === '.doc') {
+          return { success: false, error: 'Legacy Word .doc files are not supported. Save the file as .docx and upload it again.' };
+        }
+        if (result?.success) {
         // RC-8 fix: uploading a resume must make it immediately usable. Previously
         // knowledge mode was a SEPARATE manual toggle, so a freshly-uploaded resume
         // sat inert until the user found the switch — every question fell through to
@@ -9085,8 +9208,22 @@ export function initializeIpcHandlers(appState: AppState): void {
                 : 0),
           extractionMode: activeResume?._extraction_mode ?? 'unknown',
         });
+        }
+        return result?.success ? {
+          ...result,
+          extraction: {
+            fileName: extraction.fileName,
+            extension: extraction.extension,
+            sha256: extraction.binarySha256,
+            pageCount: extraction.pageCount,
+            extractedPageCount: extraction.extractedPageCount,
+            preview: extraction.preview,
+          },
+        } : result;
+      } finally {
+        await fs.promises.rm(resumeTempDir, { recursive: true, force: true })
+          .catch(() => console.warn('[IPC] Could not remove the temporary resume snapshot.'));
       }
-      return result;
     } catch (error: any) {
       console.error('[IPC] profile:upload-resume error:', error);
       return { success: false, error: error.message };

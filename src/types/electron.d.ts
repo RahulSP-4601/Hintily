@@ -38,6 +38,15 @@ export interface ElectronAPI {
   hintilyAuthRefresh: () => Promise<HintilyAuthResult>
   hintilyAuthSignOut: () => Promise<HintilyAuthResult>
   hintilyAuthDeleteAccount: () => Promise<HintilyAuthResult>
+  hintilyBusinessEnsureTrial: () => Promise<HintilyBusinessResult<HintilyAccountState>>
+  hintilyBusinessGetState: () => Promise<HintilyBusinessResult<HintilyAccountState>>
+  hintilyBusinessAuthorizeSession: (clientSessionId: string) => Promise<HintilyBusinessResult<HintilySessionAuthorization>>
+  hintilyBusinessActivateSession: (sessionId: string) => Promise<HintilyBusinessResult<{ session_id: string; status: 'active' }>>
+  hintilyBusinessHeartbeat: (input: { sessionId: string; sequenceNo: number; activeSeconds: number }) => Promise<HintilyBusinessResult<HintilyHeartbeatResult>>
+  hintilyBusinessCompleteSession: (input: { sessionId: string; failureCode?: string }) => Promise<HintilyBusinessResult<HintilyAccountState>>
+  hintilyBusinessCreateCheckout: (productCode: string) => Promise<HintilyBusinessResult<{ checkout_url: string; session_id: string | null }>>
+  onHintilyCheckoutReturn: (callback: (payload: { outcome: 'success' | 'cancel' }) => void) => () => void
+  onHintilyTimeWarning: (callback: (payload: { remainingSeconds: number }) => void) => () => void
   onHintilyAuthChanged: (callback: (status: HintilyAuthStatus) => void) => () => void
   visionBenchmarkInfo: () => Promise<any>
   visionBenchmarkPickImage: () => Promise<{ cancelled: boolean; path?: string }>
@@ -188,7 +197,7 @@ export interface ElectronAPI {
   }) => Promise<{ ok: boolean; error?: string; status?: number }>
   getNativelyPricing: () => Promise<{ ok: boolean; currency?: string; fetchedAt?: string; stale?: boolean; products?: Record<string, { id: string; dodoProductId: string; name: string; amount: number | null; currency: string; formattedPrice: string | null; interval: 'month' | 'year' | 'lifetime'; checkoutUrl: string; coupon: { code: string; eligible: boolean; discountPercent: number; reason?: string } }>; error?: string; status?: number }>
   getNativelyUsage: () => Promise<{ ok: boolean; error?: string; plan?: string; quota?: { transcription: { used: number; limit: number; remaining: number }; ai: { used: number; limit: number; remaining: number }; search: { used: number; limit: number; remaining: number }; resets_at: string }; member_since?: string }>
-  getStoredCredentials: () => Promise<{ hasNativelyKey?: boolean; hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; hasDeepseekKey: boolean; hasLitellmBaseURL?: boolean; litellmBaseURL?: string | null; litellmMaxTokens?: number | null; googleServiceAccountPath: string | null; sttProvider: 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'natively'; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; groqSttModel?: string; hasSonioxKey?: boolean; hasTavilyKey?: boolean; geminiPreferredModel?: string; groqPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string; deepseekPreferredModel?: string; sttGroqKey?: string; sttOpenaiKey?: string; sttDeepgramKey?: string; sttElevenLabsKey?: string; sttAzureKey?: string; sttIbmKey?: string; sttSonioxKey?: string; openAiSttBaseUrl?: string }>
+  getStoredCredentials: () => Promise<{ hasNativelyKey?: boolean; hasGeminiKey: boolean; hasGroqKey: boolean; hasOpenaiKey: boolean; hasClaudeKey: boolean; hasDeepseekKey: boolean; hasLitellmBaseURL?: boolean; litellmBaseURL?: string | null; litellmMaxTokens?: number | null; googleServiceAccountPath: string | null; sttProvider: 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'hintily' | 'natively' | 'local-whisper'; hasSttGroqKey: boolean; hasSttOpenaiKey: boolean; hasDeepgramKey: boolean; hasElevenLabsKey: boolean; hasAzureKey: boolean; azureRegion: string; hasIbmWatsonKey: boolean; ibmWatsonRegion: string; groqSttModel?: string; hasSonioxKey?: boolean; hasTavilyKey?: boolean; geminiPreferredModel?: string; groqPreferredModel?: string; openaiPreferredModel?: string; claudePreferredModel?: string; deepseekPreferredModel?: string; sttGroqKey?: string; sttOpenaiKey?: string; sttDeepgramKey?: string; sttElevenLabsKey?: string; sttAzureKey?: string; sttIbmKey?: string; sttSonioxKey?: string; openAiSttBaseUrl?: string }>
   // Permissions
   checkPermissions:     () => Promise<{ microphone: 'granted'|'denied'|'not-determined'|'restricted'; screen: 'granted'|'denied'|'not-determined'|'restricted'; platform: string }>
   requestMicPermission: () => Promise<boolean>
@@ -203,7 +212,7 @@ export interface ElectronAPI {
   onTrialEnded:   (cb: (data: { choice: string }) => void) => () => void
 
   // STT Provider Management
-  setSttProvider: (provider: 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'natively' | 'local-whisper') => Promise<{ success: boolean; error?: string }>
+  setSttProvider: (provider: 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'hintily' | 'natively' | 'local-whisper') => Promise<{ success: boolean; error?: string }>
   getSttProvider: () => Promise<string>
   setGroqSttApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
   setOpenAiSttApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>
@@ -708,6 +717,33 @@ export interface HintilyAuthResult {
   status: HintilyAuthStatus
   error?: string
 }
+
+export interface HintilyAccountState {
+  user_id: string
+  unlimited: boolean
+  remaining_seconds: number
+  trial_remaining_seconds: number
+  paid_session_count: number
+  access_revision: string | null
+  active_session: null | { id: string; client_session_id: string; status: string; consumed_seconds: number; last_heartbeat_at: string | null }
+}
+export interface HintilySessionAuthorization {
+  session_id: string
+  status: 'pending' | 'active' | 'paused'
+  reconnected: boolean
+  unlimited: boolean
+  remaining_seconds: number | null
+  next_sequence_no: number
+}
+export interface HintilyHeartbeatResult {
+  accepted_seconds: number
+  duplicate: boolean
+  remaining_seconds: number | null
+  exhausted: boolean
+}
+export type HintilyBusinessResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string; offline?: boolean; status?: number }
 
 /**
  * Metadata sent by the companion extension with a captured page; drives the

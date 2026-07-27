@@ -975,6 +975,7 @@ import { SonioxStreamingSTT } from "./audio/SonioxStreamingSTT"
 import { ElevenLabsStreamingSTT } from "./audio/ElevenLabsStreamingSTT"
 import { OpenAIStreamingSTT } from "./audio/OpenAIStreamingSTT"
 import { NativelyProSTT } from "./audio/NativelyProSTT"
+import { HintilyManagedSession } from "./services/business/HintilyManagedSession"
 import { ThemeManager } from "./ThemeManager"
 import { RAGManager } from "./rag/RAGManager"
 import { DatabaseManager } from "./db/DatabaseManager"
@@ -2662,33 +2663,49 @@ export class AppState {
 
     let stt: STTProvider;
 
-    if (sttProvider === 'natively') {
-      const nativelyKey = CredentialsManager.getInstance().getNativelyApiKey();
-      if (!nativelyKey) {
-        // Natively is Coming Soon — no key means degrade gracefully like every other provider
-        console.warn(`[Main] No Natively API Key configured for ${speaker}, falling back to GoogleSTT`);
-        stt = new GoogleSTT(speaker);
-      } else {
-        // 'system' for interviewer (system audio), 'mic' for user (microphone).
-        // The server uses ${key}:${channel} as the session key so both streams
-        // can coexist without triggering concurrent_session_blocked.
-        //
-        // Phase 7/8: pass appVersion + platform for the regional-relay
-        // session-create body. The class reads the relay feature flags from
-        // SettingsManager itself and derives the control-plane base URL from
-        // its own host, so the construction site stays tiny. The relay path is
-        // flag-gated OFF by default — this is inert until regionalSttRelayEnabled.
-        stt = new NativelyProSTT(
-          nativelyKey,
-          speaker === 'interviewer' ? 'system' : 'mic',
-          {
-            appVersion: app.getVersion(),
-            platform: process.platform === 'darwin' ? 'mac'
-              : process.platform === 'win32' ? 'windows'
-              : 'linux',
-          },
-        );
-      }
+    if (sttProvider === 'hintily') {
+      // Hintily-managed Deepgram. Permanent credentials remain in Supabase.
+      const managed = HintilyManagedSession.getInstance();
+      const dg = new DeepgramStreamingSTT(leaseOwnerId =>
+        managed.connection(speaker, leaseOwnerId));
+      let managedChannelConnected = false;
+      const connectManagedChannel = () => {
+        if (managedChannelConnected) return;
+        managedChannelConnected = true;
+        managed.channelConnected();
+      };
+      const disconnectManagedChannel = () => {
+        if (!managedChannelConnected) return;
+        managedChannelConnected = false;
+        managed.channelDisconnected();
+      };
+      dg.on('connected', connectManagedChannel);
+      dg.on('usage', usage => managed.serverUsage(usage));
+      const stopAtExhaustion = () => {
+        this.broadcast('hintily-time-warning', { remainingSeconds: 0 });
+        dg.stop();
+      };
+      const stopForAuthChange = () => dg.stop();
+      const warnAtThreshold = ({ remainingSeconds }: { remainingSeconds: number }) =>
+        this.broadcast('hintily-time-warning', { remainingSeconds });
+      managed.on('exhausted', stopAtExhaustion);
+      managed.on('terminate', stopForAuthChange);
+      if (speaker === 'interviewer') managed.on('warning', warnAtThreshold);
+      const reportManagedError = ({ code }: { code: string }) =>
+        this.broadcast('hintily-managed-stt-error', { code });
+      if (speaker === 'interviewer') managed.on('session-error', reportManagedError);
+      dg.on('disconnected', disconnectManagedChannel);
+      dg.on('stopped', ({ permanent }: { permanent: boolean }) => {
+        disconnectManagedChannel();
+        if (!permanent) return;
+        managed.removeListener('exhausted', stopAtExhaustion);
+        managed.removeListener('terminate', stopForAuthChange);
+        if (speaker === 'interviewer') {
+          managed.removeListener('warning', warnAtThreshold);
+          managed.removeListener('session-error', reportManagedError);
+        }
+      });
+      stt = dg;
     } else if (sttProvider === 'deepgram') {
       const apiKey = CredentialsManager.getInstance().getDeepgramApiKey();
       if (apiKey) {
@@ -6829,13 +6846,49 @@ async function initializeApp() {
     app.setAsDefaultProtocolClient('hintily');
   }
 
+  let pendingHintilyCheckoutOutcome: 'success' | 'cancel' | null = null;
+  const deliverHintilyCheckoutOutcome = (outcome: 'success' | 'cancel'): void => {
+    const hasReadyRenderer = BrowserWindow.getAllWindows().some(
+      win => !win.isDestroyed() && !win.webContents.isLoadingMainFrame(),
+    );
+    if (!hasReadyRenderer) {
+      pendingHintilyCheckoutOutcome = outcome;
+      return;
+    }
+    pendingHintilyCheckoutOutcome = null;
+    AppState.getInstance().broadcast('hintily-checkout-return', { outcome });
+  };
+  const flushPendingHintilyCheckoutOutcome = (): void => {
+    if (pendingHintilyCheckoutOutcome) {
+      deliverHintilyCheckoutOutcome(pendingHintilyCheckoutOutcome);
+    }
+  };
+  const handleHintilyDeepLink = (candidate: unknown): void => {
+    if (typeof candidate !== 'string' || !candidate.startsWith('hintily://')) return;
+    try {
+      const link = new URL(candidate);
+      if (link.hostname !== 'checkout' || !['/success', '/cancel'].includes(link.pathname)) return;
+      const outcome = link.pathname === '/success' ? 'success' : 'cancel';
+      deliverHintilyCheckoutOutcome(outcome);
+      if (app.isReady()) AppState.getInstance().centerAndShowWindow();
+    } catch {
+      // Ignore malformed or unrelated protocol invocations.
+    }
+  };
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    handleHintilyDeepLink(url);
+  });
+  process.argv.forEach(handleHintilyDeepLink);
+
   // When a duplicate launch is attempted (e.g. user invokes Spotlight again
   // while Natively is running), focus and recenter the existing window so the
   // launch is visibly handled instead of silently absorbed.
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
     try {
       const appState = AppState.getInstance();
       appState.centerAndShowWindow();
+      argv.forEach(handleHintilyDeepLink);
     } catch (err) {
       console.error('[Main] second-instance handler failed:', err);
     }
@@ -7216,6 +7269,12 @@ if (process.env.THINKING_MATRIX === '1') {
 
   logStartupPhase('create-window:start');
   appState.createWindow()
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.webContents.isLoadingMainFrame()) {
+      win.webContents.once('did-finish-load', flushPendingHintilyCheckoutOutcome);
+    }
+  }
+  flushPendingHintilyCheckoutOutcome();
   logStartupPhase('create-window:complete', {
     windowCount: BrowserWindow.getAllWindows().length,
   });

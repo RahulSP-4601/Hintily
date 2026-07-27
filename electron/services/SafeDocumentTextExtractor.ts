@@ -102,6 +102,67 @@ export interface SafeDocumentTextExtractResult {
   extractedPageCount?: number;
 }
 
+export interface SafeResumeExtractResult extends SafeDocumentTextExtractResult {
+  normalizedContent: string;
+  preview: string;
+}
+
+export const SAFE_RESUME_EXTENSIONS = new Set(['.pdf', '.docx', '.txt']);
+export const SAFE_RESUME_MAX_BYTES = 10 * 1024 * 1024;
+
+const normalizeResumeText = (input: string): string => input
+  .replace(/\r\n?/g, '\n')
+  .replace(/[\t\f\v]+/g, ' ')
+  .replace(/[ \u00a0]+/g, ' ')
+  .replace(/ *\n */g, '\n')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim();
+
+export const extractSafeResumeDocument = async (
+  inputFilePath: string,
+): Promise<SafeResumeExtractResult> => {
+  const resolved = path.resolve(inputFilePath);
+  const extension = path.extname(resolved).toLowerCase();
+  if (!SAFE_RESUME_EXTENSIONS.has(extension)) throw new Error('resume format must be PDF, DOCX, or TXT');
+  const stats = await fs.promises.lstat(resolved);
+  if (!stats.isFile()) throw new Error('selected path is not a regular file');
+  if (stats.size === 0) throw new Error('resume is empty');
+  if (stats.size > SAFE_RESUME_MAX_BYTES) throw new Error('resume exceeds 10 MB limit');
+  const header = Buffer.alloc(Math.min(8, stats.size));
+  const handle = await fs.promises.open(resolved, 'r');
+  try { await handle.read(header, 0, header.length, 0); } finally { await handle.close(); }
+  if (extension === '.pdf' && header.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    throw new Error('file signature does not match PDF');
+  }
+  if (extension === '.docx' && !(header[0] === 0x50 && header[1] === 0x4b)) {
+    throw new Error('file signature does not match DOCX');
+  }
+  let extracted: SafeDocumentTextExtractResult;
+  try {
+    extracted = await extractSafeDocumentText(resolved);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (extension === '.pdf' && /password|encrypted/i.test(message)) {
+      throw new Error('password-protected PDFs are not supported');
+    }
+    throw error;
+  }
+  const normalizedContent = normalizeResumeText(extracted.content);
+  const meaningful = normalizedContent.replace(/\[Page \d+\]/g, '').match(/[\p{L}\p{N}]/gu)?.length || 0;
+  if (meaningful < 20 || normalizedContent.split(/\s+/).length < 3) {
+    if (extension === '.pdf' && extracted.pageCount &&
+        (!extracted.extractedPageCount || extracted.extractedPageCount === 0)) {
+      throw new Error('scanned PDF has no text layer; OCR is not supported yet');
+    }
+    throw new Error('resume extraction produced too little readable text');
+  }
+  return {
+    ...extracted,
+    normalizedContent,
+    preview: normalizedContent.slice(0, 2_000),
+  };
+};
+
 /**
  * Extract text from a user-selected regular file. Callers MUST authorize the
  * path (and the file's provenance as a "user selected it" event) before

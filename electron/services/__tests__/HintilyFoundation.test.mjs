@@ -83,6 +83,179 @@ test('existing Supabase compatibility migration is replayable and non-destructiv
   assert.doesNotMatch(migration, /\bdrop table\b|\btruncate\b|\bdelete from\b/i);
 });
 
+test('phases 5–9 keep grants and metered usage behind server-side functions', () => {
+  const sessions = read('supabase/migrations/202607270003_hintily_business_sessions.sql');
+  const payments = read('supabase/migrations/202607270004_hintily_dodo_processing.sql');
+  const webhook = read('supabase/functions/hintily-dodo-webhook/index.ts');
+  const token = read('supabase/functions/hintily-deepgram-token/index.ts');
+  const business = read('electron/services/business/HintilyBusinessService.ts');
+  const managed = read('electron/services/business/HintilyManagedSession.ts');
+  const ipcHandlers = read('electron/ipcHandlers.ts');
+  const businessFunction = read('supabase/functions/hintily-business/index.ts');
+
+  assert.match(sessions, /'free_trial'.*'20 Minute Free Trial'/s);
+  assert.match(sessions, /'trial', 'available', 1200, 0/);
+  assert.match(sessions, /for update skip locked limit 1/);
+  assert.match(sessions, /on conflict \(business_session_id, sequence_no\) do nothing/);
+  assert.match(sessions, /least\(requested_active_seconds/);
+  assert.match(sessions, /'access_revision'/);
+  assert.match(sessions, /'next_sequence_no'.*max\(u\.sequence_no\) \+ 1/s);
+  assert.match(
+    sessions,
+    /if target\.allocation_id is not null then[\s\S]*if not found then raise exception 'session_not_activatable'[\s\S]*if not unlimited_access then raise exception 'session_not_activatable'/,
+  );
+  assert.match(
+    businessFunction,
+    /session_not_active\|session_not_activatable/,
+  );
+  assert.match(payments, /'paid', 'available', 3600, 0/);
+  assert.match(payments, /grants_access boolean/);
+  assert.match(payments, /consumed_seconds < (?:a\.)?allocated_seconds/);
+  assert.match(payments, /on conflict \(provider, provider_event_id\)\s+where provider_event_id is not null/);
+  assert.match(payments, /on conflict \(provider, provider_payment_id\)\s+where provider_payment_id is not null/);
+  assert.match(payments, /failure_code = 'payment_access_revoked'/);
+  assert.match(payments, /status in \('available', 'reserved', 'active'\)/);
+  assert.match(payments, /'refund\.succeeded'/);
+  assert.doesNotMatch(payments, /'refund\.success'/);
+  assert.match(webhook, /verifyDodoSignature\(raw/);
+  assert.match(webhook, /event_occurred_at: eventTimestamp/);
+  assert.match(webhook, /invalid_event_timestamp/);
+  assert.match(webhook, /refund\\\.succeeded/);
+  assert.match(webhook, /hintily_apply_dodo_event/);
+  assert.match(token, /direct_provider_tokens_disabled/);
+  assert.doesNotMatch(token, /DEEPGRAM_API_KEY|auth\/grant/);
+  assert.match(business, /Authorization: `Bearer \$\{token\}`/);
+  assert.match(business, /options\?\.retry === false \? \[0\] : RETRY_DELAYS/);
+  assert.match(business, /\{ retry: false \}/);
+  assert.match(business, /captureAccessToken/);
+  assert.match(managed, /account\.data\.active_session\?\.client_session_id \?\? randomUUID\(\)/);
+  assert.match(managed, /if \(this\.authorizing\) return this\.authorizing/);
+  assert.match(managed, /if \(this\.authorizing === attempt\) this\.authorizing = null/);
+  assert.match(managed, /generation !== this\.lifecycleGeneration/);
+  assert.match(
+    managed,
+    /authorization_cancelled'[\s\S]*cleanupToken \|\| undefined/,
+  );
+  assert.match(
+    managed,
+    /stt_startup_failed'[\s\S]*cleanupToken \|\| undefined/,
+  );
+  assert.match(managed, /stopForAuthChange/);
+  assert.match(managed, /AUTH_CHANGE_CLEANUP_TIMEOUT_MS = 2_000/);
+  assert.match(managed, /Promise\.race\(\[\s*cleanup\.catch/);
+  assert.match(managed, /getDeepgramConnection/);
+  assert.match(payments, /restores_access boolean := event_type in \('dispute\.won', 'dispute\.cancelled'\)/);
+  assert.match(payments, /set status = 'available'[\s\S]*status = 'revoked'/);
+  assert.match(payments, /add column if not exists provider_event_at timestamptz/);
+  assert.match(payments, /provider_event_at > event_occurred_at/);
+  assert.match(payments, /error_code = 'stale_provider_event'/);
+  assert.match(payments, /if not terminal and not restores_access and not grants_access then/);
+  assert.match(payments, /drop function if exists public\.hintily_apply_dodo_event/);
+  assert.match(payments, /create table if not exists public\.provider_event_cutovers/);
+  assert.match(payments, /event_occurred_at < ordering_cutover/);
+  assert.match(payments, /error_code = 'provider_reconciliation_required'/);
+  assert.match(
+    payments,
+    /do update[\s\S]*status = 'processing'[\s\S]*status = 'received'[\s\S]*error_code = 'provider_reconciliation_required'/,
+  );
+  assert.match(
+    payments,
+    /set status = 'received', processed_at = null,[\s\S]*error_code = 'provider_reconciliation_required'/,
+  );
+  assert.match(ipcHandlers, /fs\.constants\.O_NOFOLLOW[\s\S]*fs\.promises\.open\(/);
+  assert.match(ipcHandlers, /extractSafeResumeDocument\(immutableResumePath\)/);
+  assert.match(ipcHandlers, /ingestDocument\(immutableResumePath, DocType\.RESUME\)/);
+  assert.match(
+    ipcHandlers,
+    /fs\.promises\.rm\(resumeTempDir, \{ recursive: true, force: true \}\)[\s\S]*\.catch\(/,
+  );
+  assert.match(
+    ipcHandlers,
+    /setSttProvider\(previousProvider\)[\s\S]*provider_reconfigure_failed[\s\S]*reconfigureSttProvider\(\)\.catch/,
+  );
+  assert.doesNotMatch(
+    payments,
+    /set provider_event_at = coalesce\(provider_event_at, updated_at, created_at\)/,
+  );
+});
+
+test('managed STT reconnects preserve enforcement and checkout returns survive cold starts', () => {
+  const main = read('electron/main.ts');
+  const preload = read('electron/preload.ts');
+  const deepgram = read('electron/audio/DeepgramStreamingSTT.ts');
+  const relay = read('supabase/functions/hintily-deepgram-stream/index.ts');
+  const leases = read('supabase/migrations/202607270005_hintily_stream_leases.sql');
+  const payments = read('supabase/migrations/202607270004_hintily_dodo_processing.sql');
+  const accountSettings = read('src/components/settings/HintilyAccountSettings.tsx');
+  const ipcHandlers = read('electron/ipcHandlers.ts');
+  const managed = read('electron/services/business/HintilyManagedSession.ts');
+
+  assert.match(deepgram, /this\.emit\('stopped', \{ permanent \}\)/);
+  assert.match(deepgram, /connectionGeneration/);
+  assert.match(deepgram, /generation !== this\.connectionGeneration/);
+  assert.match(main, /dg\.on\('disconnected', disconnectManagedChannel\)/);
+  assert.match(main, /dg\.on\('stopped'.*permanent/s);
+  assert.match(main, /managed\.on\('terminate', stopForAuthChange\)/);
+  assert.match(main, /process\.argv\.forEach\(handleHintilyDeepLink\)/);
+  assert.match(main, /did-finish-load', flushPendingHintilyCheckoutOutcome/);
+  assert.match(preload, /pendingHintilyCheckoutReturn/);
+  assert.match(preload, /hintilyCheckoutReturnSubscribers/);
+  assert.match(relay, /hintily_proxy_heartbeat/);
+  assert.match(relay, /new WebSocket\(deepgramUrl, \['token', deepgramKey\]\)/);
+  assert.match(relay, /STARTUP_BUFFER_LIMIT_BYTES/);
+  assert.match(relay, /startupBuffer\.push\(event\.data\)/);
+  assert.match(relay, /hintily_acquire_stream_lease/);
+  assert.match(relay, /hintily_renew_stream_lease/);
+  assert.match(relay, /hintily_mark_stream_ready/);
+  assert.match(relay, /hintily_release_stream_lease/);
+  assert.match(relay, /const LEASE_GUARD_MS = 10_000/);
+  assert.match(relay, /finishAndClose\(1011, 'provider_closed', true\)/);
+  assert.match(relay, /FINAL_METER_TIMEOUT_MS = 2_000/);
+  assert.match(relay, /Promise\.race\(\[\s*meter\(true\)/);
+  assert.match(relay, /finally \{\s*closeBothNow\(code, reason\)/);
+  assert.match(relay, /MAX_TRANSIENT_LEASE_FAILURES = 3/);
+  assert.match(relay, /confirmedLeaseLoss/);
+  assert.match(relay, /transientLeaseFailures >= MAX_TRANSIENT_LEASE_FAILURES/);
+  assert.match(relay, /closed \|\| closing \|\| leaseGuardInFlight/);
+  assert.match(relay, /finally \{\s*leaseGuardInFlight = false;/);
+  assert.match(relay, /streamReady = true;[\s\S]*for \(const frame of startupBuffer\)/);
+  assert.match(relay, /if \(streamReady && upstream\?\.readyState === WebSocket\.OPEN\)/);
+  assert.doesNotMatch(relay, /for \(const \[key, value\] of requestUrl\.searchParams\)/);
+  assert.match(relay, /deepgramUrl\.searchParams\.set\('model', 'nova-3'\)/);
+  assert.match(deepgram, /readonly leaseOwnerId = randomUUID\(\)/);
+  assert.match(deepgram, /hintily_lease_owner_id: managed\.leaseOwnerId/);
+  assert.match(leases, /primary key \(business_session_id, channel\)/);
+  assert.match(leases, /channel in \('interviewer', 'user'\)/);
+  assert.match(leases, /expires_at <= now\(\)/);
+  assert.match(leases, /lease_id = requested_lease_id/);
+  assert.match(leases, /lease_owner_id = excluded\.lease_owner_id/);
+  assert.match(leases, /last_heartbeat_at = now\(\)/);
+  assert.match(leases, /started_at is not null/);
+  assert.match(leases, /interval '25 seconds'/);
+  assert.match(leases, /interval '30 seconds'/);
+  assert.match(leases, /failure_code = 'payment_access_revoked'/);
+  assert.match(leases, /if remaining = 0 then[\s\S]*status = 'completed'/);
+  assert.match(leases, /if remaining = 0 then[\s\S]*delete from public\.deepgram_stream_leases/);
+  assert.match(payments, /s\.allocation_id is null[\s\S]*not exists \([\s\S]*e\.unlimited/);
+  assert.match(accountSettings, /CHECKOUT_BASELINE_KEY/);
+  assert.match(accountSettings, /storeCheckoutBaseline\(baseline\)/);
+  assert.match(accountSettings, /readCheckoutBaseline\(\)/);
+  assert.match(
+    accountSettings,
+    /hintilyAuthRefresh\(\)[\s\S]*hintilyBusinessGetState\(\)/,
+  );
+  assert.match(accountSettings, /checkoutBaselineRevision\.current = baseline/);
+  assert.match(accountSettings, /disabled=\{busy !== null \|\| checkoutBusy\}/);
+  assert.match(
+    ipcHandlers,
+    /provider === 'hintily'[\s\S]*!managedSession\.activeSessionId[\s\S]*managedSession\.authorize\(\)/,
+  );
+  assert.match(
+    managed,
+    /if \(payload\.exhausted\) \{\s*this\.sessionId = null;\s*this\.connectedChannels = 0;/,
+  );
+});
+
 test('legacy environment aliases are isolated to the central config module', () => {
   const config = read('electron/config/hintily.ts');
 
@@ -142,6 +315,14 @@ test('account IPC actions wait for keychain session restoration', () => {
       new RegExp(`safeHandle\\('${channel.replaceAll('-', '\\-')}'[\\s\\S]*?afterHintilyAuthReady`),
     );
   }
+  assert.match(
+    ipcHandlers,
+    /hintily-auth:sign-out'[\s\S]*stopForAuthChange\('signed_out'\)[\s\S]*hintilyAuth\.signOut\(\)/,
+  );
+  assert.match(
+    ipcHandlers,
+    /hintily-auth:delete-account'[\s\S]*stopForAuthChange\('account_deleted'\)[\s\S]*hintilyAuth\.deleteAccount\(\)/,
+  );
 });
 
 test('packaged startup performs a non-destructive legacy user-data migration', () => {

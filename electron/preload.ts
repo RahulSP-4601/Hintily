@@ -20,6 +20,15 @@ interface ElectronAPI {
   hintilyAuthRefresh: () => Promise<HintilyAuthResult>;
   hintilyAuthSignOut: () => Promise<HintilyAuthResult>;
   hintilyAuthDeleteAccount: () => Promise<HintilyAuthResult>;
+  hintilyBusinessEnsureTrial: () => Promise<any>;
+  hintilyBusinessGetState: () => Promise<any>;
+  hintilyBusinessAuthorizeSession: (clientSessionId: string) => Promise<any>;
+  hintilyBusinessActivateSession: (sessionId: string) => Promise<any>;
+  hintilyBusinessHeartbeat: (input: { sessionId: string; sequenceNo: number; activeSeconds: number }) => Promise<any>;
+  hintilyBusinessCompleteSession: (input: { sessionId: string; failureCode?: string }) => Promise<any>;
+  hintilyBusinessCreateCheckout: (productCode: string) => Promise<any>;
+  onHintilyCheckoutReturn: (callback: (payload: { outcome: 'success' | 'cancel' }) => void) => () => void;
+  onHintilyTimeWarning: (callback: (payload: { remainingSeconds: number }) => void) => () => void;
   onHintilyAuthChanged: (callback: (status: HintilyAuthStatus) => void) => () => void;
   updateContentDimensions: (dimensions: { width: number; height: number }) => Promise<void>;
   updateContentDimensionsCentered: (dimensions: { width: number; height: number }) => Promise<void>;
@@ -1069,6 +1078,24 @@ export const PROCESSING_EVENTS = {
   DEBUG_ERROR: 'debug-error',
 } as const;
 
+type HintilyCheckoutReturn = { outcome: 'success' | 'cancel' };
+let pendingHintilyCheckoutReturn: HintilyCheckoutReturn | null = null;
+const hintilyCheckoutReturnSubscribers = new Set<
+  (payload: HintilyCheckoutReturn) => void
+>();
+
+ipcRenderer.on('hintily-checkout-return', (_event, payload: unknown) => {
+  if (!payload || typeof payload !== 'object') return;
+  const outcome = (payload as { outcome?: unknown }).outcome;
+  if (outcome !== 'success' && outcome !== 'cancel') return;
+  const validated: HintilyCheckoutReturn = { outcome };
+  if (hintilyCheckoutReturnSubscribers.size === 0) {
+    pendingHintilyCheckoutReturn = validated;
+    return;
+  }
+  for (const subscriber of hintilyCheckoutReturnSubscribers) subscriber(validated);
+});
+
 // Expose the Electron API to the renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
   hintilyAuthGetStatus: () => ipcRenderer.invoke('hintily-auth:get-status'),
@@ -1076,6 +1103,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
   hintilyAuthRefresh: () => ipcRenderer.invoke('hintily-auth:refresh'),
   hintilyAuthSignOut: () => ipcRenderer.invoke('hintily-auth:sign-out'),
   hintilyAuthDeleteAccount: () => ipcRenderer.invoke('hintily-auth:delete-account'),
+  hintilyBusinessEnsureTrial: () => ipcRenderer.invoke('hintily-business:ensure-trial'),
+  hintilyBusinessGetState: () => ipcRenderer.invoke('hintily-business:get-state'),
+  hintilyBusinessAuthorizeSession: (clientSessionId: string) =>
+    ipcRenderer.invoke('hintily-business:authorize-session', clientSessionId),
+  hintilyBusinessActivateSession: (sessionId: string) =>
+    ipcRenderer.invoke('hintily-business:activate-session', sessionId),
+  hintilyBusinessHeartbeat: (input: { sessionId: string; sequenceNo: number; activeSeconds: number }) =>
+    ipcRenderer.invoke('hintily-business:heartbeat', input),
+  hintilyBusinessCompleteSession: (input: { sessionId: string; failureCode?: string }) =>
+    ipcRenderer.invoke('hintily-business:complete-session', input),
+  hintilyBusinessCreateCheckout: (productCode: string) =>
+    ipcRenderer.invoke('hintily-business:create-checkout', productCode),
+  onHintilyCheckoutReturn: (callback: (payload: { outcome: 'success' | 'cancel' }) => void) => {
+    hintilyCheckoutReturnSubscribers.add(callback);
+    if (pendingHintilyCheckoutReturn) {
+      const pending = pendingHintilyCheckoutReturn;
+      pendingHintilyCheckoutReturn = null;
+      queueMicrotask(() => {
+        if (hintilyCheckoutReturnSubscribers.has(callback)) callback(pending);
+      });
+    }
+    return () => hintilyCheckoutReturnSubscribers.delete(callback);
+  },
+  onHintilyTimeWarning: (callback: (payload: { remainingSeconds: number }) => void) => {
+    const subscription = (_: unknown, payload: { remainingSeconds: number }) => callback(payload);
+    ipcRenderer.on('hintily-time-warning', subscription);
+    return () => ipcRenderer.removeListener('hintily-time-warning', subscription);
+  },
   onHintilyAuthChanged: (callback: (status: HintilyAuthStatus) => void) => {
     const subscription = (_: unknown, status: HintilyAuthStatus) => callback(status);
     ipcRenderer.on('hintily-auth:changed', subscription);
