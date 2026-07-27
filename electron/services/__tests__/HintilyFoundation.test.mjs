@@ -56,6 +56,33 @@ test('foundation schema enables RLS and denies client-side financial mutations',
   assert.match(migration, /on conflict \(user_id\) do nothing/);
 });
 
+test('existing Supabase compatibility migration is replayable and non-destructive', () => {
+  const migration = read(
+    'supabase/migrations/202607270002_hintily_existing_project_compat.sql',
+  );
+  const tables = [
+    'user_profiles',
+    'entitlements',
+    'purchases',
+    'session_allocations',
+    'business_sessions',
+    'usage_sessions',
+    'webhook_events',
+    'review_prompt_state',
+    'reviews',
+  ];
+
+  for (const table of tables) {
+    assert.match(migration, new RegExp(`create table if not exists public\\.${table}`));
+    assert.match(migration, new RegExp(`alter table if exists public\\.${table}`));
+  }
+  assert.match(migration, /add column if not exists allocated_seconds integer/);
+  assert.match(migration, /add column if not exists provider_payment_id text/);
+  assert.match(migration, /on delete set null/);
+  assert.match(migration, /where columns\.column_name is null/);
+  assert.doesNotMatch(migration, /\bdrop table\b|\btruncate\b|\bdelete from\b/i);
+});
+
 test('legacy environment aliases are isolated to the central config module', () => {
   const config = read('electron/config/hintily.ts');
 
