@@ -188,6 +188,14 @@ export function initializeIpcHandlers(appState: AppState): void {
   // initialize() is still restoring it, after which initialize() writes the
   // credentials back and signs the user in again.
   const hintilyAuthReady = hintilyAuth.initialize();
+  const syncProfileOwner = async () => {
+    await hintilyAuthReady;
+    const owner = hintilyAuth.getStatus()?.user?.id || 'local_default';
+    appState.getKnowledgeOrchestrator()?.setOwnerScope?.(owner);
+  };
+  hintilyAuth.on('changed', (status: any) => {
+    appState.getKnowledgeOrchestrator()?.setOwnerScope?.(status?.user?.id || 'local_default');
+  });
   const afterHintilyAuthReady = async <T>(operation: () => Promise<T> | T): Promise<T> => {
     await hintilyAuthReady;
     return operation();
@@ -2422,6 +2430,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             const { retrieveProfileEvidence } = require('./services/knowledge/OkfProfileRetriever') as typeof import('./services/knowledge/OkfProfileRetriever');
             const profileEvidence = retrieveProfileEvidence({
               question: message,
+              ownerScope: appState.getKnowledgeOrchestrator()?.getOwnerScope?.(),
               profileContextPolicy: answerPlan.profileContextPolicy,
               // Pass the REAL doc-grounded state so the retriever's own gate 4 is
               // live defense-in-depth (not dead code). It is false here only
@@ -6007,6 +6016,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           sqliteDb.exec(`
             DELETE FROM company_dossiers;
             DELETE FROM knowledge_documents;
+            DELETE FROM knowledge_nodes;
             DELETE FROM resume_nodes;
             DELETE FROM user_profile;
           `);
@@ -6074,6 +6084,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           sqliteDb.exec(`
             DELETE FROM company_dossiers;
             DELETE FROM knowledge_documents;
+            DELETE FROM knowledge_nodes;
             DELETE FROM resume_nodes;
             DELETE FROM user_profile;
           `);
@@ -9130,6 +9141,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             'Pro license required. Please activate a license key to use Profile Intelligence features.',
         };
       }
+      await syncProfileOwner();
       const resolvedPath = consumeSelectedProfilePath(filePath);
       if (!resolvedPath) {
         console.warn('[IPC] profile:upload-resume rejected: path was not produced by profile:select-file or has expired.');
@@ -9178,7 +9190,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         }
         const { DocType } = require('../premium/electron/knowledge/types');
         const result = await orchestrator.ingestDocument(immutableResumePath, DocType.RESUME);
-        if (!result?.success && path.extname(immutableResumePath).toLowerCase() === '.doc') {
+        if (!result?.success && path.extname(resolvedPath).toLowerCase() === '.doc') {
           return { success: false, error: 'Legacy Word .doc files are not supported. Save the file as .docx and upload it again.' };
         }
         if (result?.success) {
@@ -9232,6 +9244,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('profile:get-status', async () => {
     try {
+      await syncProfileOwner();
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
         return { hasProfile: false, profileMode: false };
@@ -9293,12 +9306,14 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('profile:delete', async () => {
     try {
+      await syncProfileOwner();
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
         return { success: false, error: 'Knowledge engine not initialized' };
       }
       const { DocType } = require('../premium/electron/knowledge/types');
-      orchestrator.deleteDocumentsByType(DocType.RESUME);
+      const { deleteProfileTransactional } = require('./services/knowledge/deleteProfileTransactional');
+      deleteProfileTransactional(orchestrator, DocType.RESUME, 'resume');
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -9307,11 +9322,38 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('profile:get-profile', async () => {
     try {
+      await syncProfileOwner();
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) return null;
       return orchestrator.getProfileData();
     } catch (error: any) {
       return null;
+    }
+  });
+
+  safeHandle('profile:update-structured', async (_, payload: {
+    docType?: 'resume' | 'jd';
+    structuredData?: unknown;
+    expectedRevision?: string;
+  }) => {
+    try {
+      await syncProfileOwner();
+      if (!isProOrTrialActive()) return { success: false, error: 'Pro license required.' };
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) return { success: false, error: 'Knowledge engine not initialized' };
+      if (!payload || (payload.docType !== 'resume' && payload.docType !== 'jd')) {
+        return { success: false, error: 'Invalid document type' };
+      }
+      if (typeof payload.expectedRevision !== 'string' || !payload.expectedRevision.trim()) {
+        return { success: false, error: 'Document revision is required. Reload before saving.' };
+      }
+      return orchestrator.updateStructuredDocument(
+        payload.docType,
+        payload.structuredData,
+        payload.expectedRevision,
+      );
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Unable to update profile' };
     }
   });
 
@@ -9321,6 +9363,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // on the orchestrator's full profile-data assembly path.
   safeHandle('profile:get-company-dossier', async () => {
     try {
+      await syncProfileOwner();
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
         console.log('[CompanyIntel-hydrate] no orchestrator');
@@ -9333,7 +9376,20 @@ export function initializeIpcHandlers(appState: AppState): void {
         console.log('[CompanyIntel-hydrate] no company on active JD, returning null');
         return null;
       }
-      const dossier = orchestrator.getCompanyResearchEngine().getCachedDossier(company);
+      const activeJD = profileData?.activeJD;
+      const jdCtx = activeJD
+        ? {
+            title: activeJD.title,
+            location: activeJD.location,
+            level: activeJD.level,
+            technologies: activeJD.technologies,
+            requirements: activeJD.requirements,
+            keywords: activeJD.keywords,
+            compensation_hint: activeJD.compensation_hint,
+            min_years_experience: activeJD.min_years_experience,
+          }
+        : {};
+      const dossier = orchestrator.getCompanyResearchEngine().getCachedDossier(company, jdCtx);
       console.log(`[CompanyIntel-hydrate] getCachedDossier("${company}") → ${dossier ? `${dossier.hiring_strategy?.length || 0}b hiring + ${dossier.culture_ratings?.overall || 'n/a'}/5 culture` : 'null'}`);
       return dossier;
     } catch (error: any) {
@@ -9379,6 +9435,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             'Pro license required. Please activate a license key to use Profile Intelligence features.',
         };
       }
+      await syncProfileOwner();
       const resolvedPath = consumeSelectedProfilePath(filePath);
       if (!resolvedPath) {
         console.warn('[IPC] profile:upload-jd rejected: path was not produced by profile:select-file or has expired.');
@@ -9419,12 +9476,14 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('profile:delete-jd', async () => {
     try {
+      await syncProfileOwner();
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) {
         return { success: false, error: 'Knowledge engine not initialized' };
       }
       const { DocType } = require('../premium/electron/knowledge/types');
-      orchestrator.deleteDocumentsByType(DocType.JD);
+      const { deleteProfileTransactional } = require('./services/knowledge/deleteProfileTransactional');
+      deleteProfileTransactional(orchestrator, DocType.JD, 'jd');
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
@@ -9439,6 +9498,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // any file is written — a non-conformant bundle is refused, never shipped.
   safeHandle('knowledge:export-profile-pack', async () => {
     try {
+      await syncProfileOwner();
       if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
       const { isOkfProfileMarkdownExportEnabled } = require('./intelligence/intelligenceFlags') as typeof import('./intelligence/intelligenceFlags');
       if (!isOkfProfileMarkdownExportEnabled()) return { success: false, error: 'export_flag_off' };
@@ -9450,8 +9510,9 @@ export function initializeIpcHandlers(appState: AppState): void {
 
       piTelemetry.emit('pi_okf_profile_export_requested', {});
       const builder = ProfilePackBuilder.getInstance();
-      const resumePack = builder.getProfilePack('resume');
-      const jdPack = builder.getProfilePack('jd');
+      const ownerScope = appState.getKnowledgeOrchestrator()?.getOwnerScope?.();
+      const resumePack = builder.getProfilePack('resume', ownerScope);
+      const jdPack = builder.getProfilePack('jd', ownerScope);
       if (!resumePack && !jdPack) return { success: false, error: 'no_profile_pack' };
 
       const files = exportProfileBundle({ resumePack, jdPack, nowIso: new Date().toISOString() });
@@ -9487,11 +9548,13 @@ export function initializeIpcHandlers(appState: AppState): void {
   // own handler above.
   safeHandle('knowledge:list-profile-packs', async () => {
     try {
+      await syncProfileOwner();
       if (!isProOrTrialActive()) return { success: false, error: 'pro_required', packs: [] };
       const { isOkfProfileKnowledgeUiEnabled } = require('./intelligence/intelligenceFlags') as typeof import('./intelligence/intelligenceFlags');
       if (!isOkfProfileKnowledgeUiEnabled()) return { success: false, error: 'ui_flag_off', packs: [] };
       const { ProfilePackBuilder } = require('./services/knowledge/ProfilePackBuilder') as typeof import('./services/knowledge/ProfilePackBuilder');
-      const packs = ProfilePackBuilder.getInstance().getAllProfilePacks().map((p) => ({
+      const ownerScope = appState.getKnowledgeOrchestrator()?.getOwnerScope?.();
+      const packs = ProfilePackBuilder.getInstance().getAllProfilePacks(ownerScope).map((p) => ({
         id: p.id, fileName: p.fileName, cardCount: p.stats.cardCount, entityCount: p.stats.entityCount,
         packVersion: p.packVersion, updatedAt: p.updatedAt,
         cardsByType: p.cards.reduce((acc: Record<string, number>, c) => { acc[c.type] = (acc[c.type] || 0) + 1; return acc; }, {}),
@@ -9504,12 +9567,14 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('knowledge:get-profile-pack', async (_, kind: string) => {
     try {
+      await syncProfileOwner();
       if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
       const { isOkfProfileKnowledgeUiEnabled } = require('./intelligence/intelligenceFlags') as typeof import('./intelligence/intelligenceFlags');
       if (!isOkfProfileKnowledgeUiEnabled()) return { success: false, error: 'ui_flag_off' };
       const { ProfilePackBuilder } = require('./services/knowledge/ProfilePackBuilder') as typeof import('./services/knowledge/ProfilePackBuilder');
       const wantKind = kind === 'jd' ? 'jd' : 'resume';
-      const pack = ProfilePackBuilder.getInstance().getProfilePack(wantKind);
+      const ownerScope = appState.getKnowledgeOrchestrator()?.getOwnerScope?.();
+      const pack = ProfilePackBuilder.getInstance().getProfilePack(wantKind, ownerScope);
       if (!pack) return { success: false, error: 'no_pack' };
       return {
         success: true,
@@ -9529,6 +9594,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('profile:research-company', async (_, companyName: string) => {
     try {
+      await syncProfileOwner();
       console.log(`[CompanyIntel-research] invoked for companyName="${companyName}"`);
       // Premium gate
       if (!isProOrTrialActive()) {
@@ -9544,7 +9610,8 @@ export function initializeIpcHandlers(appState: AppState): void {
       }
       const engine = orchestrator.getCompanyResearchEngine();
 
-      // Wire search provider: Tavily (user key) → Natively API (fallback) → none (LLM-only)
+      // Tavily is optional. Without it, the engine produces a clearly labelled
+      // LLM-only dossier and does not call the retired Natively search backend.
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
       const tavilyApiKey = cm.getTavilyApiKey();
@@ -9554,21 +9621,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         } = require('../premium/electron/knowledge/TavilySearchProvider');
         engine.setSearchProvider(new TavilySearchProvider(tavilyApiKey));
       } else {
-        const nativelyKey = cm.getNativelyApiKey();
-        if (nativelyKey) {
-          const {
-            NativelySearchProvider,
-          } = require('../premium/electron/knowledge/NativelySearchProvider');
-          // Pass the real trial token when key is the __trial__ sentinel so the
-          // server can authenticate via x-trial-token instead of the invalid key.
-          const trialToken = nativelyKey === TRIAL_SENTINEL_KEY ? cm.getTrialToken() : undefined;
-          engine.setSearchProvider(
-            new NativelySearchProvider(nativelyKey, trialToken ?? undefined),
-          );
-          console.log(
-            '[IPC] Company research: using Natively API search (no Tavily key configured)',
-          );
-        }
+        engine.setSearchProvider(null);
       }
 
       // Build full JD context so the dossier is tailored to the exact role
@@ -9598,6 +9651,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('profile:generate-negotiation', async (_, force: boolean = false) => {
     try {
+      await syncProfileOwner();
       // Premium gate
       if (!isProOrTrialActive()) {
         return {
@@ -9636,6 +9690,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('profile:generate-cover-letter', async (_, force: boolean = false) => {
     try {
+      await syncProfileOwner();
       // Premium gate
       if (!isProOrTrialActive()) {
         return {
@@ -9674,6 +9729,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('profile:get-negotiation-state', async () => {
     try {
+      await syncProfileOwner();
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) return { success: false, error: 'Engine not ready' };
       const tracker = orchestrator.getNegotiationTracker();
@@ -9689,6 +9745,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('profile:reset-negotiation', async () => {
     try {
+      await syncProfileOwner();
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) return { success: false };
       orchestrator.resetNegotiationSession();
@@ -11380,13 +11437,14 @@ export function initializeIpcHandlers(appState: AppState): void {
         const orchestrator = appState.getKnowledgeOrchestrator();
         if (!orchestrator) return { success: false, error: 'orchestrator_not_initialized' };
         const o: any = orchestrator;
+        const ownerScope = o.getOwnerScope?.();
         const activeResume = o?.activeResume?.structured_data ?? null;
         const activeJD = o?.activeJD?.structured_data ?? null;
         let nodeCount = 0; let embeddingSpaces: string[] = [];
         try {
           const kdb = o?.db;
           if (kdb && typeof kdb.getAllNodes === 'function') {
-            const nodes = kdb.getAllNodes() || [];
+            const nodes = kdb.getAllNodes(ownerScope) || [];
             nodeCount = nodes.length;
             embeddingSpaces = [...new Set(nodes.map((n: any) => n.embedding_space).filter(Boolean))] as string[];
           }
@@ -11400,7 +11458,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         let okfPack: any = null;
         try {
           const { ProfilePackBuilder } = require('./services/knowledge/ProfilePackBuilder');
-          const packs = ProfilePackBuilder.getInstance().getAllProfilePacks();
+          const packs = ProfilePackBuilder.getInstance().getAllProfilePacks(ownerScope);
           okfPack = packs.map((p: any) => ({ modeId: p.modeId, fileName: p.fileName, cardCount: p.cards.length, packVersion: p.packVersion }));
         } catch { /* okf may be off */ }
         return {

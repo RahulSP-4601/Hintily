@@ -39,6 +39,7 @@ export type ProfileRetrievalBlockedReason =
 
 export interface ProfileRetrievalInput {
   question: string;
+  ownerScope?: string;
   /** From AnswerPlan.profileContextPolicy. Only 'required'|'allowed' may retrieve. */
   profileContextPolicy: 'required' | 'allowed' | 'forbidden';
   /** AnswerPlan.documentGroundedCustomModeActive === true → always blocked. */
@@ -169,7 +170,7 @@ export function retrieveProfileEvidence(input: ProfileRetrievalInput): ProfileRe
 
   let packs;
   try {
-    packs = ProfilePackBuilder.getInstance().getAllProfilePacks();
+    packs = ProfilePackBuilder.getInstance().getAllProfilePacks(input.ownerScope);
   } catch {
     return EMPTY('no_pack');
   }

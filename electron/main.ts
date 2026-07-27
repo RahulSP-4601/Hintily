@@ -2087,6 +2087,7 @@ export class AppState {
 
       if (sqliteDb && KnowledgeDatabaseManagerClass && KnowledgeOrchestratorClass) {
         const knowledgeDb = new KnowledgeDatabaseManagerClass(sqliteDb);
+        knowledgeDb.initializeSchema();
         this.knowledgeOrchestrator = new KnowledgeOrchestratorClass(knowledgeDb);
 
         // Wire up LLM functions
@@ -2851,7 +2852,10 @@ export class AppState {
       // in LLMHelper is the primary defense; gating at the source stops state
       // from carrying over to any future read site. Fails open if ModesManager
       // is unavailable.
-      if (segment.isFinal && speaker === 'interviewer') {
+      // Keep accepting trailing finals for persistence/RAG while draining, but
+      // do not repopulate meeting-scoped negotiation memory after endMeeting()
+      // has reset it.
+      if (this.isMeetingActive && segment.isFinal && speaker === 'interviewer') {
         let trackerFeedAllowed = true;
         try {
           const { ModesManager } = require('./services/ModesManager');
@@ -5366,6 +5370,10 @@ export class AppState {
     this.isMeetingActive = false;
     this._meetingGeneration++;
     this._isDraining = true;
+    // Negotiation turns are meeting-scoped. Clear them synchronously so a
+    // pending coaching response is invalidated and the next meeting cannot
+    // inherit transcript context from this one.
+    this.knowledgeOrchestrator?.resetNegotiationSession?.();
     this.broadcastMeetingState();
 
     // ─── ABORT + AWAIT IN-FLIGHT AUDIO INIT (before any capture teardown) ───

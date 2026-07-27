@@ -90,10 +90,27 @@ test('Phase1-DB: profile pack persists, reads back, is pii, isolated from user m
   const jdTypes = new Set(jdRes.pack.cards.map((c) => c.type));
   assert.ok(jdTypes.has('artifact_gap_analysis'), 'jd pack has artifact cards');
 
-  // 7) Delete removes both.
+  // 7) Signed-in owner scopes cannot overwrite or delete each other's packs.
+  const alice = builder.generateForProfile({
+    kind: 'resume', ownerScope: 'alice', structuredData: FIXTURE_RESUME,
+  }, true);
+  const bob = builder.generateForProfile({
+    kind: 'resume', ownerScope: 'bob',
+    structuredData: { ...FIXTURE_RESUME, identity: { ...FIXTURE_RESUME.identity, name: 'Bob' } },
+  }, true);
+  assert.equal(alice.status, 'generated');
+  assert.equal(bob.status, 'generated');
+  assert.notEqual(alice.pack.id, bob.pack.id);
+  builder.deleteProfilePack('resume', 'alice');
+  assert.equal(builder.getProfilePack('resume', 'alice'), null);
+  assert.ok(builder.getProfilePack('resume', 'bob'), 'deleting Alice must not delete Bob');
+
+  // 8) No-owner deletion is the global privacy backstop and removes every
+  // owner's profile PII, not just local_default.
   builder.deleteAllProfilePacks();
   assert.equal(builder.getProfilePack('resume'), null, 'resume pack deleted');
   assert.equal(builder.getProfilePack('jd'), null, 'jd pack deleted');
+  assert.equal(builder.getProfilePack('resume', 'bob'), null, 'signed-in owner pack deleted by global wipe');
 });
 
 // The flags-OFF no-op assertion (which must flip the shared

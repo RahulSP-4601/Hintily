@@ -26,7 +26,7 @@ import { buildResumeCardDrafts, buildJdCardDrafts, buildArtifactCardDrafts, type
 import { verifyProfileCards } from './OkfProfileVerifier';
 import { linkRelatedCards } from './OkfCardBuilder';
 import { extractProfileGraphRelations } from './ProfileGraphExtractor';
-import { getCachedPack, setCachedPack, invalidatePackCache } from './KnowledgeCache';
+import { getCachedPack, setCachedPack, invalidatePackCache, clearAllPackCache } from './KnowledgeCache';
 import { DatabaseManager } from '../../db/DatabaseManager';
 import type {
   KnowledgeCard, KnowledgeEntity, KnowledgePack, KnowledgeSource, KnowledgeSourceType,
@@ -49,6 +49,7 @@ export type ProfileDocKind = 'resume' | 'jd';
 
 export interface ProfileIngestInput {
   kind: ProfileDocKind;
+  ownerScope?: string;
   /**
    * The premium knowledge_documents row id. Reserved/provenance only — it is
    * deliberately NOT part of the content hash (a re-upload mints a new id, which
@@ -86,8 +87,32 @@ function sourceTypeFor(kind: ProfileDocKind): KnowledgeSourceType {
   return kind === 'resume' ? 'profile_resume' : 'profile_jd';
 }
 /** In-memory cache key only — see PROFILE_RESUME_FILE_ID doc. Never written to file_id. */
-function cacheKeyFor(kind: ProfileDocKind): string {
-  return kind === 'resume' ? PROFILE_RESUME_FILE_ID : PROFILE_JD_FILE_ID;
+function normalizedOwner(ownerScope?: string): string {
+  return String(ownerScope || '').trim() || 'local_default';
+}
+function ownerToken(ownerScope?: string): string {
+  return sha256(normalizedOwner(ownerScope)).slice(0, 16);
+}
+function profileModeId(ownerScope?: string): string {
+  return PROFILE_OKF_MODE_ID;
+}
+function sourceIdFor(kind: ProfileDocKind, ownerScope?: string): string {
+  const owner = normalizedOwner(ownerScope);
+  const seed = owner === 'local_default'
+    ? `${PROFILE_OKF_MODE_ID}:${kind}`
+    : `${PROFILE_OKF_MODE_ID}:${ownerToken(owner)}:${kind}`;
+  return shortId('psrc', seed);
+}
+function packIdFor(kind: ProfileDocKind, ownerScope?: string): string {
+  const owner = normalizedOwner(ownerScope);
+  const seed = owner === 'local_default'
+    ? `${PROFILE_OKF_MODE_ID}:${kind}`
+    : `${PROFILE_OKF_MODE_ID}:${ownerToken(owner)}:${kind}`;
+  return shortId('ppack', seed);
+}
+function cacheKeyFor(kind: ProfileDocKind, ownerScope?: string): string {
+  const base = kind === 'resume' ? PROFILE_RESUME_FILE_ID : PROFILE_JD_FILE_ID;
+  return normalizedOwner(ownerScope) === 'local_default' ? base : `${base}:${ownerToken(ownerScope)}`;
 }
 
 /**
@@ -201,10 +226,11 @@ export class ProfilePackBuilder {
    * FK parent), so they are keyed by mode+type rather than by fileId like
    * document sources.
    */
-  private findProfileSource(kind: ProfileDocKind): KnowledgeSource | null {
+  private findProfileSource(kind: ProfileDocKind, ownerScope?: string): KnowledgeSource | null {
     const wantType = sourceTypeFor(kind);
-    const sources = this.store.getSourcesByModeId(PROFILE_OKF_MODE_ID);
-    return sources.find((s) => s.type === wantType) || null;
+    const wantId = sourceIdFor(kind, ownerScope);
+    const sources = this.store.getSourcesByModeId(profileModeId(ownerScope));
+    return sources.find((s) => s.type === wantType && s.id === wantId) || null;
   }
 
   /**
@@ -221,7 +247,8 @@ export class ProfilePackBuilder {
     const t0 = Date.now();
     try {
       const kind = input.kind;
-      const cacheKey = cacheKeyFor(kind);
+      const cacheKey = cacheKeyFor(kind, input.ownerScope);
+      const modeId = profileModeId(input.ownerScope);
       // Content-only hash (NO docId): a re-upload of identical resume/JD content
       // gets a NEW knowledge_documents autoincrement id, so folding docId in here
       // would make every re-ingest look "changed" and needlessly regenerate the
@@ -232,14 +259,14 @@ export class ProfilePackBuilder {
       // dates, the premium engine could recompute it independently — including it
       // closes the "resume text identical but recomputed year count" staleness gap.
       const contentHash = sha256(`${kind}:${input.totalExperienceYears ?? ''}:${sourceText}`);
-      const existingSource = this.findProfileSource(kind);
+      const existingSource = this.findProfileSource(kind, input.ownerScope);
       if (!force && existingSource && existingSource.contentHash === contentHash) {
         const cached = this.store.getPackBySourceId(existingSource.id);
         return { status: 'generated', pack: cached ?? undefined };
       }
 
-      const sourceId = existingSource?.id || shortId('psrc', `${PROFILE_OKF_MODE_ID}:${kind}`);
-      const packId = shortId('ppack', `${PROFILE_OKF_MODE_ID}:${kind}`);
+      const sourceId = existingSource?.id || sourceIdFor(kind, input.ownerScope);
+      const packId = packIdFor(kind, input.ownerScope);
       const nowIso = new Date().toISOString();
       const sourceChecksum = contentHash;
 
@@ -262,7 +289,7 @@ export class ProfilePackBuilder {
       const pack: KnowledgePack = {
         id: packId,
         sourceId,
-        modeId: PROFILE_OKF_MODE_ID,
+        modeId,
         fileName: kind === 'resume' ? 'Candidate Resume' : 'Target Job Description',
         cards,
         entities,
@@ -287,7 +314,7 @@ export class ProfilePackBuilder {
         type: sourceTypeFor(kind),
         // fileId intentionally omitted (stored NULL): profile has no
         // mode_reference_files row, and file_id carries a runtime-enforced FK.
-        modeId: PROFILE_OKF_MODE_ID,
+        modeId,
         fileName: pack.fileName,
         sourceChecksum,
         contentHash,
@@ -324,10 +351,10 @@ export class ProfilePackBuilder {
   }
 
   /** The persisted pack for a profile doc kind, or null. Cache-first. */
-  getProfilePack(kind: ProfileDocKind): KnowledgePack | null {
-    const source = this.findProfileSource(kind);
+  getProfilePack(kind: ProfileDocKind, ownerScope?: string): KnowledgePack | null {
+    const source = this.findProfileSource(kind, ownerScope);
     if (!source) return null;
-    const cacheKey = cacheKeyFor(kind);
+    const cacheKey = cacheKeyFor(kind, ownerScope);
     const cached = getCachedPack(cacheKey, source.contentHash);
     if (cached) return cached;
     const pack = this.store.getPackBySourceId(source.id);
@@ -336,29 +363,51 @@ export class ProfilePackBuilder {
   }
 
   /** Both profile packs (resume + JD), whichever exist. */
-  getAllProfilePacks(): KnowledgePack[] {
+  getAllProfilePacks(ownerScope?: string): KnowledgePack[] {
     const packs: KnowledgePack[] = [];
     for (const kind of ['resume', 'jd'] as ProfileDocKind[]) {
-      const p = this.getProfilePack(kind);
+      const p = this.getProfilePack(kind, ownerScope);
       if (p) packs.push(p);
     }
     return packs;
   }
 
   /** Delete one profile doc kind's pack (used by re-ingest / partial clear). */
-  deleteProfilePack(kind: ProfileDocKind): void {
-    const source = this.findProfileSource(kind);
+  deleteProfilePack(kind: ProfileDocKind, ownerScope?: string): void {
+    const source = this.findProfileSource(kind, ownerScope);
     if (source) this.store.deleteSource(source.id);
-    invalidatePackCache(cacheKeyFor(kind));
+    invalidatePackCache(cacheKeyFor(kind, ownerScope));
     piTelemetry.emit('pi_okf_profile_pack_invalidated', { docType: kind });
   }
 
-  /** Delete ALL profile packs (wired into profile:clear). */
-  deleteAllProfilePacks(): void {
+  /**
+   * Delete profile packs.
+   *
+   * With an owner this is an account-scoped clear. With no owner it is the
+   * privacy backstop used by trial teardown, so it must remove profile PII for
+   * every owner represented in the reserved profile mode.
+   */
+  deleteAllProfilePacks(ownerScope?: string): void {
+    if (ownerScope === undefined) {
+      const sources = this.store.getSourcesByModeId(PROFILE_OKF_MODE_ID)
+        .filter(source => source.type === 'profile_resume' || source.type === 'profile_jd');
+      DatabaseManager.getInstance().runInTransaction(() => {
+        for (const source of sources) this.store.deleteSource(source.id);
+      });
+      // Owner cache keys contain one-way owner hashes, so a global privacy wipe
+      // cannot reconstruct each key. Clear process-local caches after deleting
+      // the persisted sources to ensure no PII remains reachable in memory.
+      clearAllPackCache();
+      piTelemetry.emit('pi_okf_profile_pack_invalidated', {
+        docType: 'all',
+        sourceCount: sources.length,
+      });
+      return;
+    }
     // deleteProfilePack already invalidatePackCache(cacheKeyFor(kind)) per kind,
     // which drops both the pack-cache entry AND any retrieval-cache entries keyed
     // to it — so a global clearAllPackCache() here would needlessly thrash every
     // DOCUMENT mode's pack cache too. Per-key invalidation is sufficient.
-    for (const kind of ['resume', 'jd'] as ProfileDocKind[]) this.deleteProfilePack(kind);
+    for (const kind of ['resume', 'jd'] as ProfileDocKind[]) this.deleteProfilePack(kind, ownerScope);
   }
 }

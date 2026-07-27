@@ -18,6 +18,8 @@ import type { ProfileDocKind } from './ProfilePackBuilder';
 
 export interface Tier1ProfileDeleter {
   deleteDocumentsByType(docType: unknown): void;
+  getOwnerScope?(): string;
+  refreshCache?(): void;
 }
 
 /**
@@ -31,8 +33,19 @@ export function deleteProfileTransactional(
   docType: unknown,
   kind: ProfileDocKind,
 ): void {
-  DatabaseManager.getInstance().runInTransaction(() => {
-    orchestrator.deleteDocumentsByType(docType);
-    ProfilePackBuilder.getInstance().deleteProfilePack(kind);
-  });
+  try {
+    DatabaseManager.getInstance().runInTransaction(() => {
+      orchestrator.deleteDocumentsByType(docType);
+      ProfilePackBuilder.getInstance().deleteProfilePack(kind, orchestrator.getOwnerScope?.());
+    });
+  } catch (error) {
+    // Tier 1 mutates its in-memory active document while deleting. SQLite
+    // rollback restores the row, so reload memory before propagating failure.
+    try {
+      orchestrator.refreshCache?.();
+    } catch {
+      // Preserve the original delete error; a subsequent status read retries.
+    }
+    throw error;
+  }
 }

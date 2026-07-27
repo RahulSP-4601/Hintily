@@ -2405,6 +2405,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   profileSetMode: (enabled: boolean) => ipcRenderer.invoke('profile:set-mode', enabled),
   profileDelete: () => ipcRenderer.invoke('profile:delete'),
   profileGetProfile: () => ipcRenderer.invoke('profile:get-profile'),
+  profileUpdateStructured: (payload: {
+    docType: 'resume' | 'jd';
+    structuredData: unknown;
+    expectedRevision: string;
+  }) => ipcRenderer.invoke('profile:update-structured', payload),
   profileGetCompanyDossier: () => ipcRenderer.invoke('profile:get-company-dossier'),
   profileSelectFile: () => ipcRenderer.invoke('profile:select-file'),
 

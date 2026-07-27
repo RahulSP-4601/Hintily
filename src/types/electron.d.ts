@@ -558,6 +558,11 @@ export interface ElectronAPI {
   profileSetMode: (enabled: boolean) => Promise<{ success: boolean; error?: string }>
   profileDelete: () => Promise<{ success: boolean; error?: string }>
   profileGetProfile: () => Promise<any>
+  profileUpdateStructured: (payload: {
+    docType: 'resume' | 'jd'
+    structuredData: unknown
+    expectedRevision: string
+  }) => Promise<{ success: boolean; error?: string; profile?: any }>
   profileGetCompanyDossier: () => Promise<any | null>
   profileSelectFile: () => Promise<{ success?: boolean; cancelled?: boolean; filePath?: string; error?: string }>
 

@@ -94,6 +94,23 @@ describe('processQuestionGated', () => {
     assert.equal(allowed.bypassed, false);
   });
 
+  test('allows JD-only retrieval when resume evidence is forbidden', async () => {
+    let receivedSources;
+    const spy = {
+      processQuestion: async (_question, allowedSourceKinds) => {
+        receivedSources = allowedSourceKinds;
+        return { factualRecall: true };
+      },
+    };
+    const result = await processQuestionGated(
+      spy,
+      'What does this job require?',
+      { resumeAllowed: false, jdAllowed: true },
+    );
+    assert.equal(result.bypassed, false);
+    assert.deepEqual(receivedSources, ['profile_jd']);
+  });
+
   test('projectAllowedSources correctly derives resumeAllowed/jdAllowed from a real CanonicalTurn', () => {
     const codingTurn = turnFor('Solve two sum.');
     const projection = projectAllowedSources(codingTurn);

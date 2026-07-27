@@ -615,6 +615,10 @@ export function ProfileIntelligenceSettings({
     const [profileError, setProfileError] = useState('');
     const profileAbortRef = useRef<{ cancelled: boolean }>({ cancelled: false });
     const [profileData, setProfileData] = useState<any>(null);
+    const [editingDocument, setEditingDocument] = useState<'resume' | 'jd' | null>(null);
+    const [structuredDraft, setStructuredDraft] = useState('');
+    const [structuredSaveError, setStructuredSaveError] = useState('');
+    const [structuredSaving, setStructuredSaving] = useState(false);
 
     // ── Hero stat (static rounded value, no count-up) ────────────────────────
     const heroYearsRounded = (profileStatus.totalExperienceYears != null && Number.isFinite(profileStatus.totalExperienceYears))
@@ -785,6 +789,40 @@ export function ProfileIntelligenceSettings({
         await doJdUpload(fileResult.filePath);
     };
 
+    const beginStructuredEdit = (docType: 'resume' | 'jd') => {
+        const value = docType === 'resume' ? profileData?.structured_data : profileData?.activeJD;
+        setStructuredDraft(JSON.stringify(value ?? {}, null, 2));
+        setStructuredSaveError('');
+        setEditingDocument(docType);
+    };
+
+    const saveStructuredEdit = async () => {
+        if (!editingDocument) return;
+        setStructuredSaveError('');
+        setStructuredSaving(true);
+        try {
+            const parsed = JSON.parse(structuredDraft);
+            const expectedRevision = editingDocument === 'resume'
+                ? profileData?.resumeRevision
+                : profileData?.jdRevision;
+            if (!expectedRevision) {
+                throw new Error('This document is missing its revision. Reload the profile before saving.');
+            }
+            const result = await window.electronAPI?.profileUpdateStructured?.({
+                docType: editingDocument,
+                structuredData: parsed,
+                expectedRevision,
+            });
+            if (!result?.success) throw new Error(result?.error || 'Save failed');
+            setProfileData(result.profile ?? await window.electronAPI?.profileGetProfile?.());
+            setEditingDocument(null);
+        } catch (error: any) {
+            setStructuredSaveError(error?.message || 'Enter valid JSON before saving.');
+        } finally {
+            setStructuredSaving(false);
+        }
+    };
+
     const doCompanyResearch = async () => {
         const company = profileData?.activeJD?.company;
         if (!company) return;
@@ -931,9 +969,14 @@ export function ProfileIntelligenceSettings({
                         );
                     })()}
                     {!profileUploading && (
-                        <button className="pi-add-file-btn" onClick={browseResume}>
-                            <Plus size={12} /> Replace file
-                        </button>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                            <button className="pi-add-file-btn" onClick={browseResume}>
+                                <Plus size={12} /> Replace file
+                            </button>
+                            <button className="pi-add-file-btn" onClick={() => beginStructuredEdit('resume')}>
+                                Review extracted data
+                            </button>
+                        </div>
                     )}
                 </div>
             )}
@@ -1027,15 +1070,43 @@ export function ProfileIntelligenceSettings({
                         );
                     })()}
                     {!jdUploading && (
-                        <button className="pi-add-file-btn" onClick={browseJD}>
-                            <Plus size={12} /> Replace file
-                        </button>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                            <button className="pi-add-file-btn" onClick={browseJD}>
+                                <Plus size={12} /> Replace file
+                            </button>
+                            <button className="pi-add-file-btn" onClick={() => beginStructuredEdit('jd')}>
+                                Review extracted data
+                            </button>
+                        </div>
                     )}
                 </div>
             )}
             {jdError && (
                 <div style={{ fontSize: 11, color: 'var(--pi-danger)', padding: '6px 10px', borderRadius: 6, background: 'var(--pi-danger-bg)' }}>
                     {jdError}
+                </div>
+            )}
+            {editingDocument && (
+                <div style={{ marginTop: 14, padding: 12, border: '1px solid var(--pi-border)', borderRadius: 'var(--pi-r-md)', background: 'var(--pi-card-bg)' }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--pi-primary)', marginBottom: 8 }}>
+                        Review {editingDocument === 'resume' ? 'resume' : 'job description'} data
+                    </div>
+                    <p style={{ fontSize: 11, color: 'var(--pi-secondary)', margin: '0 0 8px' }}>
+                        Correct only facts present in your document. Saved corrections become the trusted source used by the assistant.
+                    </p>
+                    <textarea
+                        value={structuredDraft}
+                        onChange={event => setStructuredDraft(event.target.value)}
+                        spellCheck={false}
+                        style={{ width: '100%', minHeight: 260, resize: 'vertical', boxSizing: 'border-box', borderRadius: 8, border: '1px solid var(--pi-input-border)', background: 'var(--pi-input-bg)', color: 'var(--pi-primary)', padding: 10, fontFamily: 'ui-monospace, monospace', fontSize: 11 }}
+                    />
+                    {structuredSaveError && <div style={{ color: 'var(--pi-danger)', fontSize: 11, marginTop: 6 }}>{structuredSaveError}</div>}
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
+                        <button className="pi-add-file-btn" disabled={structuredSaving} onClick={() => setEditingDocument(null)}>Cancel</button>
+                        <button className="pi-add-file-btn" disabled={structuredSaving} onClick={saveStructuredEdit}>
+                            {structuredSaving ? 'Saving…' : 'Save corrections'}
+                        </button>
+                    </div>
                 </div>
             )}
 

@@ -50,7 +50,7 @@ function isCanonicalTurn(value: CanonicalTurn | AllowedSourcesProjection): value
 
 /** Minimal structural type for the orchestrator method this gate wraps — avoids importing the full class just for its shape. */
 export interface QuestionProcessor {
-  processQuestion(question: string): Promise<unknown>;
+  processQuestion(question: string, allowedSourceKinds?: string[]): Promise<unknown>;
 }
 
 export interface GatedProcessQuestionResult {
@@ -78,8 +78,8 @@ export async function processQuestionGated(
   allowed: CanonicalTurn | AllowedSourcesProjection,
 ): Promise<GatedProcessQuestionResult> {
   const projection = isCanonicalTurn(allowed) ? projectAllowedSources(allowed) : allowed;
-  if (!projection.resumeAllowed) {
-    return { bypassed: true, reason: 'resume forbidden for this answer type (isLayerAllowed)', result: null };
+  if (!projection.resumeAllowed && !projection.jdAllowed) {
+    return { bypassed: true, reason: 'profile sources forbidden for this answer type (isLayerAllowed)', result: null };
   }
   // Note: `assertLayerUsageAllowedOrThrow` (contextRoute.ts, item 4) is NOT
   // called here — it would be a no-op tautology at this exact point (this
@@ -88,6 +88,10 @@ export async function processQuestionGated(
   // assertion belongs at REAL retrieval-execution sites once Slice 4's full
   // UnifiedRetriever pipeline exists, as a confirming check that a layer
   // actually used matches what was authorized — not duplicated here.
-  const result = await orchestrator.processQuestion(question);
+  const allowedSourceKinds = [
+    ...(projection.resumeAllowed ? ['profile_resume', 'projects'] : []),
+    ...(projection.jdAllowed ? ['profile_jd'] : []),
+  ];
+  const result = await orchestrator.processQuestion(question, allowedSourceKinds);
   return { bypassed: false, result };
 }

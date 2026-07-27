@@ -217,10 +217,7 @@ export const extractSafeDocumentText = async (
     }
   } else if (extension === '.docx') {
     const mammoth = require('mammoth');
-    const data: any = await withTimeout<any>(
-      mammoth.extractRawText({ path: filePath }),
-      'DOCX parse',
-    );
+    const data: any = await withTimeout<any>(mammoth.extractRawText({ path: filePath }), 'DOCX parse');
     content = String(data?.value || '');
   } else {
     content = parseTextFile(binary, fileName, extension);

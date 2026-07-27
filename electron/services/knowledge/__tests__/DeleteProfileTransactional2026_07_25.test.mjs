@@ -41,12 +41,22 @@ describe('deleteProfileTransactional.ts wraps both tiers in one real transaction
     assert.ok(txStart >= 0, 'must call DatabaseManager.getInstance().runInTransaction with a closure');
     const txBody = fnBody.slice(txStart, fnBody.indexOf('});', txStart));
     assert.match(txBody, /orchestrator\.deleteDocumentsByType\(docType\)/, 'Tier 1 delete must be inside the transaction closure');
-    assert.match(txBody, /ProfilePackBuilder\.getInstance\(\)\.deleteProfilePack\(kind\)/, 'Tier 2 delete must be inside the transaction closure');
+    assert.match(
+      txBody,
+      /ProfilePackBuilder\.getInstance\(\)\.deleteProfilePack\(kind,\s*orchestrator\.getOwnerScope\?\.\(\)\)/,
+      'owner-scoped Tier 2 delete must be inside the transaction closure',
+    );
   });
 
   test('imports the real DatabaseManager and ProfilePackBuilder singletons (not a mock/stub)', () => {
     assert.match(deleteModuleSrc, /import \{ DatabaseManager \} from '\.\.\/\.\.\/db\/DatabaseManager'/);
     assert.match(deleteModuleSrc, /import \{ ProfilePackBuilder \} from '\.\/ProfilePackBuilder'/);
+  });
+
+  test('reloads orchestrator memory when the database transaction rolls back', () => {
+    assert.match(deleteModuleSrc, /catch \(error\)/);
+    assert.match(deleteModuleSrc, /orchestrator\.refreshCache\?\.\(\)/);
+    assert.match(deleteModuleSrc, /throw error/);
   });
 });
 
