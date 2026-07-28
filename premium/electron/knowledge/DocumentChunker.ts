@@ -23,7 +23,9 @@ const bucketForSkill = (skill: string): keyof CategorizedSkills => {
 };
 
 export const toCategorizedSkills = (value: unknown): CategorizedSkills => {
-  const result = Object.fromEntries(SKILL_CATEGORIES.map(key => [key, []])) as CategorizedSkills;
+  const result = Object.fromEntries(
+    SKILL_CATEGORIES.map((key): [keyof CategorizedSkills, string[]] => [key, []]),
+  ) as CategorizedSkills;
   if (Array.isArray(value)) {
     for (const skill of unique(value)) result[bucketForSkill(skill)].push(skill);
     return result;

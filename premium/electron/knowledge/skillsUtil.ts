@@ -12,7 +12,9 @@ export const classifySkill = (skill: unknown): keyof CategorizedSkills => {
   return 'tools';
 };
 
-const empty = (): CategorizedSkills => Object.fromEntries(SKILL_CATEGORIES.map(key => [key, []])) as CategorizedSkills;
+const empty = (): CategorizedSkills => Object.fromEntries(
+  SKILL_CATEGORIES.map((key): [keyof CategorizedSkills, string[]] => [key, []]),
+) as CategorizedSkills;
 const add = (result: CategorizedSkills, bucket: keyof CategorizedSkills, value: unknown) => {
   const skill = clean(value);
   if (skill && !result[bucket].some(existing => existing.toLowerCase() === skill.toLowerCase())) result[bucket].push(skill);

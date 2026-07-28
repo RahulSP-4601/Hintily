@@ -454,7 +454,7 @@ const sanitizeResumeCandidate = (raw: any, heuristic?: any): any => {
     ...toStringArray(raw?.leadership ?? []),
     ...toStringArray(raw?.activities ?? []),
   ]);
-  const next = {
+  const next: any = {
     identity: sanitizedIdentity,
     skills,
     skillsFlat: flattenSkills(skills),

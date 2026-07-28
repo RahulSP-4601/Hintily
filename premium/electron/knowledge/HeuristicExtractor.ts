@@ -4,7 +4,7 @@ const clean = (value: unknown): string => String(value ?? '').replace(/\u00a0/g,
 const lines = (text: string): string[] => String(text || '').replace(/\r/g, '').split('\n').map(clean);
 const unique = (values: string[]): string[] => Array.from(new Set(values.map(clean).filter(Boolean)));
 const emptySkills = (): CategorizedSkills => Object.fromEntries(
-  SKILL_CATEGORIES.map(key => [key, []]),
+  SKILL_CATEGORIES.map((key): [keyof CategorizedSkills, string[]] => [key, []]),
 ) as CategorizedSkills;
 const HEADER = /^(?:professional\s+)?(?:summary|profile|objective|(?:core\s+|technical\s+)?skills?|experience|work experience|professional experience|clinical experience|employment|projects?|education|achievements?|awards?|certifications?|languages?|leadership|responsibilities|requirements?|qualifications|what you bring|nice to have|preferred qualifications|about(?: the)? role)$/i;
 const SECTION = /^(summary|profile|objective|(?:core\s+|technical\s+)?skills?|experience|work experience|professional experience|clinical experience|employment|projects?|education|achievements?|awards?|certifications?|languages?|leadership|responsibilities|requirements?|qualifications|what you bring|nice to have|preferred qualifications|about(?: the)? role)\s*:?\s*$/i;
@@ -132,7 +132,21 @@ const parseExperience = (section: string[]): any[] => {
   const roleLike = (value: string) => /\b(engineer|developer|manager|director|analyst|designer|consultant|specialist|nurse|intern|founder|president|vice president|vp|cto|ceo|cfo|head of|coordinator|architect|lead|officer)\b/i.test(value);
   const locationLike = (value: string) => /^(?:[A-Za-z .'-]+,\s*[A-Z]{2}|remote|hybrid)$/i.test(value);
   const divider = (value: string) => /^[\s─—=_-]{3,}$/.test(value);
-  const make = () => ({ company: '', role: '', start_date: null, end_date: null, bullets: [], technologies: [] });
+  const make = (): {
+    company: string;
+    role: string;
+    start_date: string | null;
+    end_date: string | null;
+    bullets: string[];
+    technologies: string[];
+  } => ({
+    company: '',
+    role: '',
+    start_date: null,
+    end_date: null,
+    bullets: [],
+    technologies: [],
+  });
   for (let index = 0; index < section.length; index++) {
     const line = section[index];
     if (divider(line)) continue;
@@ -238,7 +252,7 @@ export const heuristicResumeExtract = (rawText: string): any => {
   const name = (preamble.find(looksLikeName) || (email ? nameFromEmail(email) : ''))
     .replace(/,\s*(?:RN|BSN|CCRN|MBA|PMP|CPA|MD|PhD)(?:\s*,\s*(?:RN|BSN|CCRN|MBA|PMP|CPA|MD|PhD))*\s*$/i, '');
   const summaryLines = sections.summary || sections.profile || sections.objective || [];
-  const result = {
+  const result: any = {
     _schema_version: 1,
     _extraction_mode: 'heuristic',
     identity: {
@@ -262,10 +276,10 @@ export const heuristicResumeExtract = (rawText: string): any => {
     certifications: (sections.certifications || []).map(nameValue => ({ name: nameValue.replace(/^[-*•]\s*/, '') })),
     languages: (sections.languages || []).flatMap(splitList),
     leadership: (sections.leadership || []).map(title => ({ title })),
-    source_evidence: [],
+    source_evidence: [] as any[],
     extraction_metadata: { parser_version: 1, mode: 'heuristic' },
   };
-  result.skills_flat = unique(Object.values(result.skills).flat());
+  result.skills_flat = unique(Object.values(result.skills as CategorizedSkills).flat());
   return result;
 };
 

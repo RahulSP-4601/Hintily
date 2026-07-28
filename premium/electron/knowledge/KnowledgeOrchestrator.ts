@@ -782,11 +782,10 @@ export class KnowledgeOrchestrator {
     }
 
     try {
-      const label = docType === DocType.RESUME ? 'RESUME TEXT' : 'JD TEXT';
-      const response = await this.generateContentFn([{ text: `${label}\n\n${rawText}` }]);
+      const response = await this.generateContentFn([{ text: `JD TEXT\n\n${rawText}` }]);
       const text = typeof response === 'string' ? response : String(response ?? '');
       const parsed = typeof response === 'object' && response !== null ? response : JSON.parse(text);
-      const degenerate = docType === DocType.RESUME ? isDegenerateStructuredResume(parsed) : isDegenerateStructuredJd(parsed);
+      const degenerate = isDegenerateStructuredJd(parsed);
       if (degenerate) {
         if (!heuristicsAllowed) throw new Error('structured extraction returned degenerate data');
         return useHeuristic();
@@ -901,7 +900,9 @@ export class KnowledgeOrchestrator {
           !changedPaths.some(path => pathOverlaps(String(evidence?.field || ''), path))),
         ...changedPaths.map(field => ({
           field, source: 'user', snippet: 'User-reviewed correction',
-          line_start: null, line_end: null, confidence: 1,
+          line_start: null as number | null,
+          line_end: null as number | null,
+          confidence: 1,
         })),
       ];
       normalized.extraction_metadata = {
