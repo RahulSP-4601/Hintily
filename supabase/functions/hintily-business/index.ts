@@ -27,6 +27,16 @@ Deno.serve(async (request) => {
       const { data, error } = await auth.client.rpc('hintily_account_state');
       return error ? rpcError(error) : response(200, data);
     }
+    if (request.method === 'GET' && action === 'purchases') {
+      const { data, error } = await auth.client
+        .from('purchases')
+        .select('id,product_code,amount_minor,currency,status,purchased_at,created_at')
+        .order('created_at', { ascending: false })
+        .limit(100);
+      return error ? response(500, { error: 'purchase_history_failed' }) : response(200, {
+        purchases: data || [],
+      });
+    }
     if (request.method === 'POST' && action === 'ensure-trial') {
       const { data, error } = await auth.client.rpc('hintily_ensure_trial');
       return error ? rpcError(error) : response(200, data);

@@ -74,6 +74,8 @@ export interface WhatToAnswerRequestSnapshot {
   /** The generation id for this request. Stamped onto every emitted live token so
    *  the renderer can reject tokens from a superseded answer (#3). */
   readonly generationId: number;
+  /** Resume/JD revisions used to build candidate evidence for this answer. */
+  readonly profileSourceVersions?: { resume: string | null; jd: string | null };
   /** Context OS (H1): when present AND `contextOsEvidencePackEnabled`, the typed
    *  EvidencePack GOVERNS the WTA factual prompt — the raw mode block is replaced
    *  by the rendered contract + evidence pack and the candidate_profile factual

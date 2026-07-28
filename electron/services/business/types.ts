@@ -30,6 +30,16 @@ export interface HintilyHeartbeatResult {
   exhausted: boolean;
 }
 
+export interface HintilyPurchaseSummary {
+  id: string;
+  product_code: string;
+  amount_minor: number | null;
+  currency: string | null;
+  status: 'pending' | 'paid' | 'refunded' | 'partially_refunded' | 'disputed' | 'failed';
+  purchased_at: string | null;
+  created_at: string;
+}
+
 export type HintilyBusinessResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: string; offline?: boolean; status?: number };

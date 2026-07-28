@@ -1105,6 +1105,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   hintilyAuthDeleteAccount: () => ipcRenderer.invoke('hintily-auth:delete-account'),
   hintilyBusinessEnsureTrial: () => ipcRenderer.invoke('hintily-business:ensure-trial'),
   hintilyBusinessGetState: () => ipcRenderer.invoke('hintily-business:get-state'),
+  hintilyBusinessGetPurchases: () => ipcRenderer.invoke('hintily-business:get-purchases'),
+  hintilyOpenSupport: () => ipcRenderer.invoke('hintily:open-support'),
   hintilyBusinessAuthorizeSession: (clientSessionId: string) =>
     ipcRenderer.invoke('hintily-business:authorize-session', clientSessionId),
   hintilyBusinessActivateSession: (sessionId: string) =>

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, LogIn, LogOut, RefreshCw, Trash2, UserRound } from 'lucide-react';
-import type { HintilyAccountState, HintilyAuthStatus } from '../../types/electron';
+import { AlertCircle, CheckCircle2, ExternalLink, LogIn, LogOut, RefreshCw, Trash2, UserRound } from 'lucide-react';
+import type { HintilyAccountState, HintilyAuthStatus, HintilyPurchaseSummary } from '../../types/electron';
 
 const INITIAL: HintilyAuthStatus = { state: 'signed_out', user: null };
 const CHECKOUT_BASELINE_KEY = 'hintily.checkoutBaselineRevision';
@@ -32,6 +32,20 @@ const clearCheckoutBaseline = (): void => {
   }
 };
 
+const formatPurchaseAmount = (purchase: HintilyPurchaseSummary): string => {
+  if (purchase.amount_minor == null || !purchase.currency) return 'Amount unavailable';
+  try {
+    const formatter = new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: purchase.currency,
+    });
+    const minorUnitDigits = formatter.resolvedOptions().maximumFractionDigits ?? 2;
+    return formatter.format(purchase.amount_minor / (10 ** minorUnitDigits));
+  } catch {
+    return `${(purchase.amount_minor / 100).toFixed(2)} ${purchase.currency}`;
+  }
+};
+
 export function HintilyAccountSettings(): React.ReactElement {
   const [status, setStatus] = useState<HintilyAuthStatus>(INITIAL);
   const [busy, setBusy] = useState<'signin' | 'signout' | 'delete' | 'refresh' | null>(null);
@@ -39,8 +53,43 @@ export function HintilyAccountSettings(): React.ReactElement {
   const [account, setAccount] = useState<HintilyAccountState | null>(null);
   const [accountLoading, setAccountLoading] = useState(false);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const [purchases, setPurchases] = useState<HintilyPurchaseSummary[]>([]);
+  const [purchaseHistoryState, setPurchaseHistoryState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
   const latestAccessRevision = useRef<string | null | undefined>(undefined);
   const checkoutBaselineRevision = useRef<string | null | undefined>(undefined);
+  const activeUserId = useRef<string | null>(null);
+  const initialAuthReady = useRef<Promise<HintilyAuthStatus> | null>(null);
+  const purchaseRequestGeneration = useRef(0);
+  const signedInUserId = status.state === 'signed_in' ? status.user.id : null;
+
+  const refreshPurchases = async (): Promise<boolean> => {
+    const requestedForUserId = activeUserId.current;
+    if (!requestedForUserId) return false;
+    const requestGeneration = ++purchaseRequestGeneration.current;
+    setPurchaseHistoryState('loading');
+    try {
+      const history = await window.electronAPI.hintilyBusinessGetPurchases();
+      if (
+        activeUserId.current !== requestedForUserId
+        || purchaseRequestGeneration.current !== requestGeneration
+      ) return false;
+      if (!history.ok) {
+        setPurchaseHistoryState('error');
+        return false;
+      }
+      setPurchases(history.data.purchases);
+      setPurchaseHistoryState('loaded');
+      return true;
+    } catch {
+      if (
+        activeUserId.current === requestedForUserId
+        && purchaseRequestGeneration.current === requestGeneration
+      ) {
+        setPurchaseHistoryState('error');
+      }
+      return false;
+    }
+  };
 
   useEffect(() => {
     latestAccessRevision.current = account?.access_revision;
@@ -48,11 +97,20 @@ export function HintilyAccountSettings(): React.ReactElement {
 
   useEffect(() => {
     let mounted = true;
-    window.electronAPI.hintilyAuthGetStatus()
-      .then((next) => mounted && setStatus(next))
+    const statusPromise = window.electronAPI.hintilyAuthGetStatus();
+    initialAuthReady.current = statusPromise;
+    statusPromise
+      .then((next) => {
+        if (!mounted) return;
+        activeUserId.current = next.state === 'signed_in' ? next.user.id : null;
+        setStatus(next);
+      })
       .catch(() => mounted && setMessage('Unable to load account status.'));
     const unsubscribe = window.electronAPI.onHintilyAuthChanged((next) => {
-      if (mounted) setStatus(next);
+      if (mounted) {
+        activeUserId.current = next.state === 'signed_in' ? next.user.id : null;
+        setStatus(next);
+      }
     });
     return () => {
       mounted = false;
@@ -61,22 +119,48 @@ export function HintilyAccountSettings(): React.ReactElement {
   }, []);
 
   useEffect(() => {
-    if (status.state !== 'signed_in') {
+    if (!signedInUserId) {
+      purchaseRequestGeneration.current += 1;
       setAccount(null);
+      setPurchases([]);
+      setPurchaseHistoryState('idle');
+      setAccountLoading(false);
       return;
     }
+    const requestedForUserId = signedInUserId;
     let mounted = true;
+    setAccount(null);
+    setPurchases([]);
+    setPurchaseHistoryState('loading');
     setAccountLoading(true);
     window.electronAPI.hintilyBusinessEnsureTrial()
-      .then(result => {
-        if (!mounted) return;
-        if (result.ok) setAccount(result.data);
-        else setMessage(result.offline ? 'Account time could not be verified while offline.' : `Unable to load access: ${result.error}`);
+      .then(async result => {
+        if (!mounted || activeUserId.current !== requestedForUserId) return;
+        if (result.ok) {
+          setAccount(result.data);
+          // Session access is ready; purchase history is supplemental and must
+          // not keep the available-time UI behind its independent retry budget.
+          setAccountLoading(false);
+          void refreshPurchases();
+        }
+        else {
+          setPurchaseHistoryState('error');
+          setMessage(result.offline ? 'Account time could not be verified while offline.' : `Unable to load access: ${result.error}`);
+        }
       })
-      .catch(() => mounted && setMessage('Unable to load Hintily access.'))
-      .finally(() => mounted && setAccountLoading(false));
+      .catch(() => {
+        if (mounted && activeUserId.current === requestedForUserId) {
+          setPurchaseHistoryState('error');
+          setMessage('Unable to load Hintily access.');
+        }
+      })
+      .finally(() => {
+        if (mounted && activeUserId.current === requestedForUserId) {
+          setAccountLoading(false);
+        }
+      });
     return () => { mounted = false; };
-  }, [status.state]);
+  }, [signedInUserId]);
 
   useEffect(() => window.electronAPI.onHintilyCheckoutReturn(async ({ outcome }) => {
     if (outcome === 'cancel') {
@@ -85,24 +169,38 @@ export function HintilyAccountSettings(): React.ReactElement {
       setMessage('Checkout was cancelled. No access was changed.');
       return;
     }
+    if (!activeUserId.current && initialAuthReady.current) {
+      await initialAuthReady.current.catch(() => null);
+    }
+    const checkoutUserId = activeUserId.current;
+    if (!checkoutUserId) {
+      setMessage('Sign in again before refreshing checkout access.');
+      return;
+    }
     setMessage('Payment received. Waiting for Dodo verification…');
     let baseline = checkoutBaselineRevision.current !== undefined
       ? checkoutBaselineRevision.current
       : readCheckoutBaseline();
     for (const delay of [500, 1_500, 3_000, 6_000]) {
       await new Promise(resolve => setTimeout(resolve, delay));
+      if (activeUserId.current !== checkoutUserId) return;
       const result = await window.electronAPI.hintilyBusinessGetState();
+      if (activeUserId.current !== checkoutUserId) return;
       if (result.ok) {
         setAccount(result.data);
         if (baseline === undefined) {
-          clearCheckoutBaseline();
-          setMessage('Account access refreshed after checkout.');
-          return;
+          // Without the pre-checkout revision there is no trustworthy value to
+          // compare against. Keep polling, but never turn an unchanged account
+          // state into a false "access refreshed" confirmation.
+          continue;
         }
         if (result.data.access_revision !== baseline) {
           checkoutBaselineRevision.current = undefined;
           clearCheckoutBaseline();
           setMessage('Access refreshed after checkout.');
+          // Access verification is complete. History has its own loading/error
+          // state and must not delay this confirmation through its retry budget.
+          void refreshPurchases();
           return;
         }
       }
@@ -179,6 +277,9 @@ export function HintilyAccountSettings(): React.ReactElement {
                 const accountResult = await window.electronAPI.hintilyBusinessGetState();
                 if (accountResult.ok) {
                   setAccount(accountResult.data);
+                  // Purchase history is supplemental. Refresh it independently
+                  // without delaying or changing the successful access result.
+                  void refreshPurchases();
                   return authResult;
                 }
                 return {
@@ -266,6 +367,70 @@ export function HintilyAccountSettings(): React.ReactElement {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="mt-5 rounded-lg border border-border-subtle p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-text-primary">Purchase history</p>
+                <p className="text-xs text-text-secondary">Dodo payment records linked to this account.</p>
+              </div>
+              <button
+                onClick={async () => {
+                  setMessage(null);
+                  try {
+                    const result = await window.electronAPI.hintilyOpenSupport();
+                    if (!result.success) {
+                      setMessage('Support could not be opened. Please try again shortly.');
+                    }
+                  } catch {
+                    setMessage('Support could not be opened. Please try again shortly.');
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-accent-primary"
+              >
+                Refunds & support <ExternalLink size={12} />
+              </button>
+            </div>
+            {purchaseHistoryState === 'loading' ? (
+              <p className="mt-3 text-xs text-text-secondary">Loading purchase history…</p>
+            ) : purchaseHistoryState === 'error' ? (
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <p className="text-xs text-amber-500">Purchase history is temporarily unavailable.</p>
+                <button
+                  onClick={() => void refreshPurchases()}
+                  className="text-xs font-medium text-accent-primary"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : purchases.length === 0 ? (
+              <p className="mt-3 text-xs text-text-secondary">No purchases yet.</p>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {purchases.map(purchase => {
+                  const amount = formatPurchaseAmount(purchase);
+                  return (
+                    <div key={purchase.id} className="flex items-center justify-between gap-3 rounded-lg bg-bg-subtle/50 px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-medium text-text-primary">
+                          {purchase.product_code.replace(/_/g, ' ')}
+                        </p>
+                        <p className="text-[11px] text-text-secondary">
+                          {new Date(purchase.purchased_at || purchase.created_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-text-primary">{amount}</p>
+                        <p className="text-[11px] capitalize text-text-secondary">
+                          {purchase.status.replace(/_/g, ' ')}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       ) : status.state !== 'unconfigured' ? (

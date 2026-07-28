@@ -702,6 +702,7 @@ ANSWER SHAPE: ${intentResult.answerShape}
                 ? {
                     answerType: answerPlan?.answerType,
                     contextOsGeneration: governedWtaContextOs,
+                    profileSourceVersions: requestSnapshot?.profileSourceVersions,
                     // Grounding-campaign3 (2026-07-23): thread the t0 mode pin so
                     // LLMHelper._streamChatInner's always-on document-grounded
                     // retrieval reads the SAME mode the request was planned
@@ -711,6 +712,7 @@ ANSWER SHAPE: ${intentResult.answerShape}
                 }
                 : {
                     answerType: answerPlan?.answerType,
+                    profileSourceVersions: requestSnapshot?.profileSourceVersions,
                     pinnedModeId: requestSnapshot?.modeUniqueId ?? null,
                 };
             for await (const token of this.llmHelper.streamChat(packet.userMessage, imagePaths, undefined, finalPromptOverride, true, true, packetScopes, abortSignal, wtaThinkingBudget, wtaRouteOptions)) {

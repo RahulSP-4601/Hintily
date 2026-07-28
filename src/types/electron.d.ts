@@ -40,6 +40,8 @@ export interface ElectronAPI {
   hintilyAuthDeleteAccount: () => Promise<HintilyAuthResult>
   hintilyBusinessEnsureTrial: () => Promise<HintilyBusinessResult<HintilyAccountState>>
   hintilyBusinessGetState: () => Promise<HintilyBusinessResult<HintilyAccountState>>
+  hintilyBusinessGetPurchases: () => Promise<HintilyBusinessResult<{ purchases: HintilyPurchaseSummary[] }>>
+  hintilyOpenSupport: () => Promise<{ success: boolean; error?: string }>
   hintilyBusinessAuthorizeSession: (clientSessionId: string) => Promise<HintilyBusinessResult<HintilySessionAuthorization>>
   hintilyBusinessActivateSession: (sessionId: string) => Promise<HintilyBusinessResult<{ session_id: string; status: 'active' }>>
   hintilyBusinessHeartbeat: (input: { sessionId: string; sequenceNo: number; activeSeconds: number }) => Promise<HintilyBusinessResult<HintilyHeartbeatResult>>
@@ -745,6 +747,15 @@ export interface HintilyHeartbeatResult {
   duplicate: boolean
   remaining_seconds: number | null
   exhausted: boolean
+}
+export interface HintilyPurchaseSummary {
+  id: string
+  product_code: string
+  amount_minor: number | null
+  currency: string | null
+  status: 'pending' | 'paid' | 'refunded' | 'partially_refunded' | 'disputed' | 'failed'
+  purchased_at: string | null
+  created_at: string
 }
 export type HintilyBusinessResult<T> =
   | { ok: true; data: T }

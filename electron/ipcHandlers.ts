@@ -23,6 +23,7 @@ import { DEFAULT_BUILTIN_SKILL_IDS, type SkillUploadPayload } from './services/s
 import { HintilyAuthService } from './services/auth/HintilyAuthService';
 import { HintilyBusinessService } from './services/business/HintilyBusinessService';
 import { HintilyManagedSession } from './services/business/HintilyManagedSession';
+import { getHintilyConfig } from './config/hintily';
 
 import { TRIAL_SENTINEL_KEY, DOM_CONTEXT_MAX_CHARS } from './config/constants';
 import { AI_RESPONSE_LANGUAGES, RECOGNITION_LANGUAGES } from './config/languages';
@@ -222,6 +223,20 @@ export function initializeIpcHandlers(appState: AppState): void {
     afterHintilyAuthReady(() => hintilyBusiness.ensureTrial()));
   safeHandle('hintily-business:get-state', () =>
     afterHintilyAuthReady(() => hintilyBusiness.getAccountState()));
+  safeHandle('hintily-business:get-purchases', () =>
+    afterHintilyAuthReady(() => hintilyBusiness.getPurchaseHistory()));
+  safeHandle('hintily:open-support', async () => {
+    try {
+      const supportUrl = new URL(getHintilyConfig().supportUrl);
+      if (supportUrl.protocol !== 'https:' || supportUrl.username || supportUrl.password) {
+        return { success: false, error: 'invalid_support_url' };
+      }
+      await shell.openExternal(supportUrl.toString());
+      return { success: true };
+    } catch {
+      return { success: false, error: 'support_unavailable' };
+    }
+  });
   safeHandle('hintily-business:authorize-session', (_, clientSessionId: unknown) =>
     afterHintilyAuthReady(() => typeof clientSessionId === 'string' && hintilyUuid.test(clientSessionId)
       ? hintilyBusiness.authorizeSession(clientSessionId)
@@ -4351,6 +4366,19 @@ export function initializeIpcHandlers(appState: AppState): void {
           }
         } catch (streamError: any) {
           console.error('[IPC] Streaming error:', streamError);
+          if (
+            streamError?.code === 'PROFILE_SOURCES_CHANGED'
+            && _chatStreamsBySender.get(senderId)?.streamId === myStreamId
+          ) {
+            const safe = 'Your profile changed while this answer was being generated. Please retry.';
+            event.sender.send('gemini-stream-done', { finalText: safe });
+            try {
+              PhoneMirrorService.getInstance().publishDone(String(myStreamId), safe);
+            } catch (_) {
+              /* noop */
+            }
+            return null;
+          }
           // Classify the provider failure (marker-only telemetry). Full-JIT policy:
           // provider failure must NOT be repaired with deterministic profile prose.
           // If no user-visible tokens were produced, emit a transparent provider-error

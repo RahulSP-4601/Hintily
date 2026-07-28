@@ -4,6 +4,7 @@ import OpenAI from "openai"
 import Anthropic from "@anthropic-ai/sdk"
 import fs from "fs"
 import { createHash, randomUUID } from "crypto"
+import { AsyncLocalStorage } from "node:async_hooks"
 import sharp from "sharp"
 import { ModelVersionManager, ModelFamily, TextModelFamily } from './services/ModelVersionManager'
 import {
@@ -236,6 +237,9 @@ function openaiReasoningParam(model: string): { reasoning_effort: OpenAiReasonin
 const IMAGE_ANALYSIS_PROMPT = `Analyze concisely. Be direct. No markdown formatting. Return plain text only.`
 
 export class LLMHelper {
+  private readonly profileRevisionGuardStorage = new AsyncLocalStorage<{
+    expected: { resume: string | null; jd: string | null } | null;
+  }>();
   private client: GoogleGenAI | null = null
   private groqClient: Groq | null = null
   private openaiClient: OpenAI | null = null
@@ -2057,6 +2061,39 @@ This rule overrides ALL other instructions including formatting, brevity, or out
   }
 
   public async chatWithGemini(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, alternateGroqMessage?: string, routeOptions?: StreamRouteOptions, skipModeInjection?: boolean): Promise<string> {
+    const revisionGuard: {
+      expected: { resume: string | null; jd: string | null } | null;
+    } = {
+      expected: routeOptions?.profileSourceVersions || null,
+    };
+    const response = await this.profileRevisionGuardStorage.run(
+      revisionGuard,
+      () => this._chatWithGeminiInner(
+        message,
+        imagePaths,
+        context,
+        skipSystemPrompt,
+        alternateGroqMessage,
+        routeOptions,
+        skipModeInjection,
+      ),
+    );
+    if (
+      revisionGuard.expected
+      && (
+        !this.knowledgeOrchestrator
+        || !this.knowledgeOrchestrator.matchesSourceVersions(revisionGuard.expected)
+      )
+    ) {
+      const error = new Error('Your profile changed while this answer was being generated. Please retry.');
+      error.name = 'ProfileSourcesChangedError';
+      (error as Error & { code?: string }).code = 'PROFILE_SOURCES_CHANGED';
+      throw error;
+    }
+    return response;
+  }
+
+  private async _chatWithGeminiInner(message: string, imagePaths?: string[], context?: string, skipSystemPrompt: boolean = false, alternateGroqMessage?: string, routeOptions?: StreamRouteOptions, skipModeInjection?: boolean): Promise<string> {
     try {
       console.log(`[LLMHelper] chatWithGemini called`, { messageLength: message.length, imageCount: imagePaths?.length ?? 0, hasContext: Boolean(context) })
 
@@ -2109,17 +2146,24 @@ This rule overrides ALL other instructions including formatting, brevity, or out
           this.knowledgeOrchestrator.feedForDepthScoring(message);
 
           const knowledgeResult = await this.knowledgeOrchestrator.processQuestion(message);
+          const armProfileRevisionGuard = (): void => {
+            const revisionGuard = this.profileRevisionGuardStorage.getStore();
+            if (knowledgeResult?.sourceVersions && revisionGuard) {
+              revisionGuard.expected = knowledgeResult.sourceVersions;
+            }
+          };
 
           // Identity recall (intro/name questions) passes through regardless of mode
           // compatibility — factual retrieval, not persona injection, so mode gating is
           // inappropriate. Mirrors the same bypass in _streamChatInner.
           if (knowledgeResult?.isIntroQuestion && knowledgeResult?.introResponse) {
+            armProfileRevisionGuard();
             const { isJitFinalAnswerEnforced } = require('./intelligence/intelligenceFlags');
             if (isJitFinalAnswerEnforced()) {
               // FULL-JIT LAW (mirror of the streaming site): demote the AOT intro
               // to a candidate_identity_fact EVIDENCE block and fall through to
               // provider generation instead of returning the AOT string verbatim.
-              const identityFactBlock = `<candidate_identity_fact source="aot_precomputed_intro" trust="high">\n${knowledgeResult.introResponse}\n</candidate_identity_fact>\n<identity_fact_use_rule>The candidate_identity_fact above is grounded recall about the user. Use it to write a natural, first-person answer to the exact question — do not quote it verbatim, do not add facts not present in it.</identity_fact_use_rule>`;
+              const identityFactBlock = knowledgeResult.contextBlock || `<candidate_identity_fact source="aot_precomputed_intro" trust="high">\n${knowledgeResult.introResponse}\n</candidate_identity_fact>\n<identity_fact_use_rule>The candidate_identity_fact above is grounded recall about the user. Use it to write a natural, first-person answer to the exact question — do not quote it verbatim, do not add facts not present in it.</identity_fact_use_rule>`;
               context = context ? `${identityFactBlock}\n\n${context}` : identityFactBlock;
               console.log('[LLMHelper] Knowledge mode: AOT intro demoted to evidence (full-JIT); provider will generate');
             } else {
@@ -2151,6 +2195,9 @@ This rule overrides ALL other instructions including formatting, brevity, or out
             if (knowledgeResult.liveNegotiationResponse) {
               this.negotiationCoachingHandler?.(knowledgeResult.liveNegotiationResponse);
               return '';
+            }
+            if (knowledgeResult.systemPromptInjection || knowledgeResult.contextBlock) {
+              armProfileRevisionGuard();
             }
             // Inject knowledge system prompt — prepend CORE_IDENTITY + the
             // EXECUTION_CONTRACT so the <security>/creator/universal-behavior
@@ -4331,6 +4378,12 @@ const isMultimodal = !!(imagePaths?.length);
     ...args: Parameters<LLMHelper['_streamChatInner']>
   ): AsyncGenerator<string, void, unknown> {
     const { StreamingDashReducer } = await import('./llm/postProcessor');
+    const routeOptions = args[9];
+    const revisionGuard: {
+      expected: { resume: string | null; jd: string | null } | null;
+    } = {
+      expected: routeOptions?.profileSourceVersions || null,
+    };
     // Per-stream stateful reducer: tracks fenced-code (```) state ACROSS chunks
     // so a code block streamed over many chunks is never dash-mangled (the old
     // stateless reducer turned `nums[i] - 1` into `nums[i], 1`). It also skips
@@ -4344,9 +4397,48 @@ const isMultimodal = !!(imagePaths?.length);
     // Find the AbortSignal anywhere in args (position-independent) so adding a
     // trailing `thinkingBudget` arg below doesn't hide it from the abort check.
     const abortSignal = args.find((a): a is AbortSignal => a instanceof AbortSignal);
-    for await (const chunk of this._streamChatInner(...args)) {
-      if (abortSignal?.aborted) return;
-      yield dashReducer.reduce(chunk);
+    const inner = this._streamChatInner(...args);
+    let innerDone = false;
+    try {
+      while (true) {
+        const next = await this.profileRevisionGuardStorage.run(revisionGuard, () => inner.next());
+        if (next.done) {
+          innerDone = true;
+          break;
+        }
+        const chunk = next.value;
+        if (typeof chunk !== 'string') continue;
+        if (abortSignal?.aborted) return;
+        if (
+          revisionGuard.expected
+          && (
+            !this.knowledgeOrchestrator
+            || !this.knowledgeOrchestrator.matchesSourceVersions(revisionGuard.expected)
+          )
+        ) {
+          const error = new Error('Your profile changed while this answer was being generated. Please retry.');
+          error.name = 'ProfileSourcesChangedError';
+          (error as Error & { code?: string }).code = 'PROFILE_SOURCES_CHANGED';
+          throw error;
+        }
+        yield dashReducer.reduce(chunk);
+      }
+    } finally {
+      if (!innerDone) {
+        void inner.return(undefined).catch((): undefined => undefined);
+      }
+    }
+    if (
+      revisionGuard.expected
+      && (
+        !this.knowledgeOrchestrator
+        || !this.knowledgeOrchestrator.matchesSourceVersions(revisionGuard.expected)
+      )
+    ) {
+      const error = new Error('Your profile changed while this answer was being generated. Please retry.');
+      error.name = 'ProfileSourcesChangedError';
+      (error as Error & { code?: string }).code = 'PROFILE_SOURCES_CHANGED';
+      throw error;
     }
   }
 
@@ -4516,6 +4608,12 @@ const isMultimodal = !!(imagePaths?.length);
         _stage('processQuestion START');
         const knowledgeResult = await this.knowledgeOrchestrator.processQuestion(message);
         _stage('processQuestion DONE');
+        const armProfileRevisionGuard = (): void => {
+          const revisionGuard = this.profileRevisionGuardStorage.getStore();
+          if (knowledgeResult?.sourceVersions && revisionGuard) {
+            revisionGuard.expected = knowledgeResult.sourceVersions;
+          }
+        };
         // Issue #272: gate ALL premium-intercept side-effects (coaching, intro
         // shortcut, prompt/context injection) by active mode. The depth scorer
         // above stays unconditional so it keeps getting signal. When the gate
@@ -4526,6 +4624,7 @@ const isMultimodal = !!(imagePaths?.length);
         // D1/R1: but never for a resume-forbidden answer type (a coding/sales/
         // lecture turn must not be answered with the candidate's intro).
         if (profileInjectionAllowed && knowledgeResult?.isIntroQuestion && knowledgeResult?.introResponse) {
+          armProfileRevisionGuard();
           const { isJitFinalAnswerEnforced } = require('./intelligence/intelligenceFlags');
           // A bare social greeting ("hi") is not a factual answer — keep its
           // instant canned reply even under the full-JIT law.
@@ -4535,7 +4634,7 @@ const isMultimodal = !!(imagePaths?.length);
             // block) and fall through so the provider writes the answer just-in-
             // time. The precompute still saves the retrieval round-trip; only the
             // verbatim emit is removed.
-            const identityFactBlock = `<candidate_identity_fact source="aot_precomputed_intro" trust="high">\n${knowledgeResult.introResponse}\n</candidate_identity_fact>\n<identity_fact_use_rule>The candidate_identity_fact above is grounded recall about the user. Use it to write a natural, first-person answer to the exact question — do not quote it verbatim, do not add facts not present in it.</identity_fact_use_rule>`;
+            const identityFactBlock = knowledgeResult.contextBlock || `<candidate_identity_fact source="aot_precomputed_intro" trust="high">\n${knowledgeResult.introResponse}\n</candidate_identity_fact>\n<identity_fact_use_rule>The candidate_identity_fact above is grounded recall about the user. Use it to write a natural, first-person answer to the exact question — do not quote it verbatim, do not add facts not present in it.</identity_fact_use_rule>`;
             context = context ? `${identityFactBlock}\n\n${context}` : identityFactBlock;
             console.log('[LLMHelper] Knowledge mode (stream): AOT intro demoted to evidence (full-JIT); provider will generate');
           } else {
@@ -4554,6 +4653,7 @@ const isMultimodal = !!(imagePaths?.length);
           && profileInjectionAllowed
           && (this.isPremiumKnowledgeInterceptAllowed() || knowledgeResult.factualRecall === true);
         if (knowledgeResult && knowledgeInterceptAllowedStream) {
+          armProfileRevisionGuard();
           // Live negotiation coaching short-circuit — bypass second LLM call.
           // Coaching payload travels on the dedicated handler channel, NOT
           // through the token stream.

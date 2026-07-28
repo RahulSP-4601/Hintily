@@ -5,6 +5,7 @@ import type {
   HintilyAccountState,
   HintilyBusinessResult,
   HintilyHeartbeatResult,
+  HintilyPurchaseSummary,
   HintilySessionAuthorization,
 } from './types';
 
@@ -79,6 +80,11 @@ export class HintilyBusinessService {
   }
   getAccountState() {
     return this.request<HintilyAccountState>('hintily-business', 'state', 'GET');
+  }
+  getPurchaseHistory() {
+    return this.request<{ purchases: HintilyPurchaseSummary[] }>(
+      'hintily-business', 'purchases', 'GET',
+    );
   }
   authorizeSession(clientSessionId: string) {
     return this.request<HintilySessionAuthorization>('hintily-business', 'authorize', 'POST', {

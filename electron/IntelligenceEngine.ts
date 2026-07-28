@@ -1438,6 +1438,7 @@ export class IntelligenceEngine extends EventEmitter {
             // rules. Negotiation/coaching are NOT pulled here — salary stays on
             // its own gated channel. Fully dynamic; resume-derived.
             let candidateProfile = '';
+            let profileSourceVersions: { resume: string | null; jd: string | null } | undefined;
             try {
                 const orchestrator = this.llmHelper.getKnowledgeOrchestrator?.();
                 if (orchestrator?.isKnowledgeMode?.() && !documentGroundedCustomModeActive
@@ -1551,6 +1552,7 @@ export class IntelligenceEngine extends EventEmitter {
                         // falsy and its salary block will NOT be pulled into the
                         // live answer here.
                         if (knowledge && knowledge.factualRecall === true && !knowledge.liveNegotiationResponse) {
+                            profileSourceVersions = knowledge.sourceVersions;
                             // PROFILE_DETAIL/identity-ambiguous → facts in contextBlock.
                             // Direct identity (name/role) → orchestrator returns a
                             // ready introResponse with empty contextBlock; wrap it as
@@ -2354,6 +2356,7 @@ export class IntelligenceEngine extends EventEmitter {
                 meetingId: meetingMarker,
                 surface: 'what_to_answer' as const,
                 generationId,
+                ...(candidateProfile.trim() && profileSourceVersions ? { profileSourceVersions } : {}),
                 ...(wtaContextOsGeneration ? { contextOsGeneration: wtaContextOsGeneration } : {}),
             });
 
@@ -2839,6 +2842,10 @@ export class IntelligenceEngine extends EventEmitter {
                                 true,
                                 [],
                                 whatToAnswerCancellationToken.signal,
+                                undefined,
+                                hasCandidateProfileForScaffold
+                                    ? { profileSourceVersions: requestSnapshot.profileSourceVersions }
+                                    : undefined,
                             ) as AsyncGenerator<string>,
                             firstUsefulDeadlineMs: this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
                             interTokenStallMs: LIVE_INTER_TOKEN_STALL_MS,
@@ -2848,7 +2855,12 @@ export class IntelligenceEngine extends EventEmitter {
                                 || isWtaSuperseded(),
                             onToken: (tok: string) => { scaffoldRepaired += tok; },
                         });
-                    } catch { /* keep original fullAnswer on repair failure */ }
+                    } catch (repairError: any) {
+                        // A normal provider/validation failure can retain the original
+                        // answer, but a source-revision failure means that original was
+                        // also assembled from profile evidence that is now stale.
+                        if (repairError?.code === 'PROFILE_SOURCES_CHANGED') throw repairError;
+                    }
                     const scaffoldRepairedTrim = scaffoldRepaired.trim();
                     if (scaffoldRepairedTrim.length >= 5 && this.currentGenerationId === generationId) {
                         // Re-check the regeneration didn't reintroduce contamination
@@ -3194,6 +3206,8 @@ export class IntelligenceEngine extends EventEmitter {
                                     true,
                                     [],
                                     whatToAnswerCancellationToken.signal,
+                                    undefined,
+                                    { profileSourceVersions: requestSnapshot.profileSourceVersions },
                                 ) as AsyncGenerator<string>,
                                 firstUsefulDeadlineMs: this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
                                 isUsefulYet: () => repaired.length >= 5,
@@ -3202,7 +3216,9 @@ export class IntelligenceEngine extends EventEmitter {
                                     || isWtaSuperseded(),
                                 onToken: (tok: string) => { repaired += tok; },
                             });
-                        } catch { /* keep partial repaired */ }
+                        } catch (repairError: any) {
+                            if (repairError?.code === 'PROFILE_SOURCES_CHANGED') throw repairError;
+                        }
                         const repairedTrim = repaired.trim();
                         if (repairedTrim.length >= 5) {
                             const reCheck = validateProfileEvidence({
@@ -3544,6 +3560,10 @@ export class IntelligenceEngine extends EventEmitter {
                                     true,
                                     [],
                                     whatToAnswerCancellationToken.signal,
+                                    undefined,
+                                    hasCandidateProfile
+                                        ? { profileSourceVersions: requestSnapshot.profileSourceVersions }
+                                        : undefined,
                                 ) as AsyncGenerator<string>,
                                 firstUsefulDeadlineMs: this.llmHelper.isUsingOllama() ? LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS : 7000,
                                 isUsefulYet: () => repaired.length >= 5,
@@ -3552,7 +3572,9 @@ export class IntelligenceEngine extends EventEmitter {
                                     || isWtaSuperseded(),
                                 onToken: (tok: string) => { repaired += tok; },
                             });
-                        } catch { /* keep original fullAnswer on repair failure */ }
+                        } catch (repairError: any) {
+                            if (repairError?.code === 'PROFILE_SOURCES_CHANGED') throw repairError;
+                        }
                         const repairedTrim = repaired.trim();
                         if (repairedTrim.length >= 5 && this.currentGenerationId === generationId) {
                             const reCheck = await checkAnswerRelevance(relevanceQuestion, repairedTrim);
