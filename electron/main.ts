@@ -18,14 +18,17 @@ import { SystemAudioHealthClassifier } from "./audio/systemAudioHealthClassifier
 import { autoUpdater } from "electron-updater"
 import { migrateLegacyUserData } from "./migrations/userDataMigration"
 
-// Override global dns.lookup to resolve macOS system resolver issues with api.natively.software
+// Legacy development-only workaround. Hintily production must never resolve or
+// call the former Natively backend.
 const originalLookup = dns.lookup;
 dns.lookup = function(hostname: any, options: any, callback: any) {
   if (typeof options === 'function') {
     callback = options;
     options = {};
   }
-  if (hostname === 'api.natively.software') {
+  if (!app.isPackaged
+      && process.env.HINTILY_ENABLE_LEGACY_BUSINESS_DEV === 'true'
+      && hostname === 'api.natively.software') {
     dns.resolve4(hostname, (err, addresses) => {
       if (err || !addresses.length) {
         originalLookup(hostname, options, callback);
@@ -1951,6 +1954,10 @@ export class AppState {
 
   private async bootstrapOllamaEmbeddings() {
     this._ollamaBootstrapPromise = (async () => {
+      if (app.isPackaged || process.env.HINTILY_ENABLE_LEGACY_BYOK_DEV !== 'true') {
+        console.log('[AppState] Ollama bootstrap disabled for Hintily managed mode.');
+        return;
+      }
       try {
         // SKIP when a cloud embedding provider is already available. Pulling the
         // 274MB `nomic-embed-text` on first launch is pure waste for users who
@@ -7244,10 +7251,13 @@ async function initializeApp() {
     const settingsManager = SettingsManager.getInstance();
     const defaultModel = CredentialsManager.getInstance().getDefaultModel();
     const shouldStartOllama =
-      settingsManager.get('autoStartOllama') === true ||
-      defaultModel.startsWith('ollama-') ||
-      defaultModel.startsWith('ollama:') ||
-      process.env.NATIVELY_AUTO_START_OLLAMA === '1';
+      !app.isPackaged
+      && process.env.HINTILY_ENABLE_LEGACY_BYOK_DEV === 'true'
+      && (
+        settingsManager.get('autoStartOllama') === true
+        || defaultModel.startsWith('ollama-')
+        || defaultModel.startsWith('ollama:')
+      );
     if (shouldStartOllama) {
       OllamaManager.getInstance().ensureRunning({
         reason: settingsManager.get('autoStartOllama') === true ? 'auto-start-setting' : 'startup-selected',
@@ -7267,8 +7277,7 @@ async function initializeApp() {
 
   // Anonymous install ping - one-time, non-blocking
   // See electron/services/InstallPingManager.ts for privacy details
-  const { sendAnonymousInstallPing } = require('./services/InstallPingManager');
-  sendAnonymousInstallPing();
+  // The inherited Natively install counter is intentionally not called.
 
   // Load stored Google Service Account path (for Speech-to-Text)
   // Fall back to GOOGLE_APPLICATION_CREDENTIALS env var (set in terminal but not Spotlight)

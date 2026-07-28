@@ -78,12 +78,14 @@ const supportUrl = requireHttpsUrl(
   'HINTILY_SUPPORT_URL',
   first('HINTILY_SUPPORT_URL') || 'https://hintily.app/support',
 );
+const googleCalendarClientId = first('HINTILY_GOOGLE_CALENDAR_CLIENT_ID');
 
 const publicConfig = {
   ...required,
   oauthCallbackUrl,
   websiteUrl,
   supportUrl,
+  googleCalendarClientId,
 };
 
 const destination = path.resolve('build/hintily.public-config.json');

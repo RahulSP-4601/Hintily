@@ -4,18 +4,20 @@ import url from 'url';
 import fs from 'fs';
 import path from 'path';
 import { EventEmitter } from 'events';
+import { getHintilyConfig } from '../config/hintily';
+import { HintilyAuthService } from './auth/HintilyAuthService';
 
 // Configuration
 // GOOGLE_CLIENT_SECRET is intentionally NOT referenced here — the desktop app
 // only needs the (non-secret) client ID to construct the auth URL. Token
-// exchange and refresh are proxied through natively-api, which holds the secret.
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "YOUR_CLIENT_ID_HERE";
+// exchange and refresh are proxied through Hintily's authenticated Edge
+// Function, which alone holds the client secret.
+const GOOGLE_CLIENT_ID = getHintilyConfig().googleCalendarClientId
+    || process.env.GOOGLE_CLIENT_ID
+    || "YOUR_CLIENT_ID_HERE";
 const REDIRECT_URI = "http://localhost:11111/auth/callback";
 const SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"];
 const TOKEN_PATH = path.join(app.getPath('userData'), 'calendar_tokens.enc');
-// Base URL for the natively-api proxy. Override with NATIVELY_API_URL for local dev
-// (e.g. http://localhost:3000). Trailing slash is stripped to keep route concat clean.
-const NATIVELY_API_URL = (process.env.NATIVELY_API_URL || 'https://api.natively.software').replace(/\/+$/, '');
 
 if (GOOGLE_CLIENT_ID === "YOUR_CLIENT_ID_HERE") {
     console.warn('[CalendarManager] GOOGLE_CLIENT_ID is using the default placeholder. Calendar features will not work until a valid client ID is provided via env var or build config.');
@@ -99,7 +101,7 @@ export class CalendarManager extends EventEmitter {
                         }
 
                         if (code) {
-                            res.end('Authentication successful! You can close this window and return to Natively.');
+                            res.end('Authentication successful! You can close this window and return to Hintily.');
                             // Exchange code for tokens. If this throws, still finish so the server closes.
                             try {
                                 await this.exchangeCodeForToken(code);
@@ -165,15 +167,9 @@ export class CalendarManager extends EventEmitter {
 
     private async exchangeCodeForToken(code: string) {
         try {
-            // Proxied through natively-api so GOOGLE_CLIENT_SECRET never ships in the desktop app.
-            // Fetch (vs. axios) so this call shares the global keep-alive pool with every other
-            // request to api.natively.software and exposes the same error shape (res.ok / res.status)
-            // as the rest of the codebase.
-            const response = await fetch(`${NATIVELY_API_URL}/api/calendar/exchange`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code, redirect_uri: REDIRECT_URI }),
-                signal: AbortSignal.timeout(15_000),
+            const response = await this.callHintilyCalendar('exchange', {
+                code,
+                redirect_uri: REDIRECT_URI,
             });
 
             if (!response.ok) {
@@ -235,12 +231,8 @@ export class CalendarManager extends EventEmitter {
         }
 
         try {
-            // Proxied through natively-api so GOOGLE_CLIENT_SECRET never ships in the desktop app.
-            const response = await fetch(`${NATIVELY_API_URL}/api/calendar/refresh`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ refresh_token: this.refreshToken }),
-                signal: AbortSignal.timeout(15_000),
+            const response = await this.callHintilyCalendar('refresh', {
+                refresh_token: this.refreshToken,
             });
 
             if (!response.ok) {
@@ -255,6 +247,27 @@ export class CalendarManager extends EventEmitter {
             // If refresh fails (e.g. revoked), disconnect
             this.disconnect();
         }
+    }
+
+    private async callHintilyCalendar(
+        action: 'exchange' | 'refresh',
+        payload: Record<string, string>,
+    ): Promise<Response> {
+        const config = getHintilyConfig();
+        const accessToken = HintilyAuthService.getInstance().getAccessToken();
+        if (!config.configured) throw new Error('hintily_account_unconfigured');
+        if (!accessToken) throw new Error('signed_out');
+        return fetch(`${config.supabaseUrl}/functions/v1/hintily-calendar/${action}`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                apikey: config.supabaseAnonKey,
+                'Content-Type': 'application/json',
+                'X-Client-Info': 'hintily-desktop',
+            },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(15_000),
+        });
     }
 
     // =========================================================================
@@ -343,7 +356,7 @@ export class CalendarManager extends EventEmitter {
         const { Notification } = require('electron');
         const notif = new Notification({
             title: 'Meeting starting soon',
-            body: `"${event.title}" starts in 2 minutes. Start Natively?`,
+            body: `"${event.title}" starts in 2 minutes. Start Hintily?`,
             actions: [
                 { type: 'button', text: 'Start Meeting' },
                 { type: 'button', text: 'Dismiss' }

@@ -5938,13 +5938,22 @@ export function initializeIpcHandlers(appState: AppState): void {
       const hwid = await getReviewHardwareId();
       const remote = await svc.getPromptState(apiKey, hwid);
       const local = svc.getLocalState();
+      const localEligibility = svc.shouldShowPrompt();
+      const authoritativeEligibility =
+        remote.ok && typeof remote.eligible === 'boolean'
+          ? {
+              eligible: remote.eligible,
+              reason: remote.reason || 'server_decision',
+            }
+          : localEligibility;
       // Local is the optimistic truth for snappy UX; backend wins on
-      // has_reviewed / dont_show_again because those are global across installs.
+      // eligibility whenever it is reachable because sessions, usage, and
+      // dismissals are account-wide across installations.
       return {
         ok: true,
         local,
         backend: remote.ok ? remote : null,
-        eligible: svc.shouldShowPrompt(),
+        eligible: authoritativeEligibility,
       };
     } catch (error: any) {
       console.error('[IPC] review:get-prompt-state failed:', error);
@@ -5984,9 +5993,12 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('review:mark-shown', async () => {
     try {
-      const { ReviewService } = require('./services/ReviewService');
+      const { ReviewService, getReviewApiKey, getReviewHardwareId } = require('./services/ReviewService');
       const svc = ReviewService.getInstance();
       svc.markShown();
+      const apiKey = getReviewApiKey();
+      const hwid = await getReviewHardwareId();
+      svc.reportEvent(apiKey, hwid, { type: 'shown' }).catch(() => {});
       return { ok: true };
     } catch (error: any) {
       return { ok: false, error: error?.message || 'unknown' };

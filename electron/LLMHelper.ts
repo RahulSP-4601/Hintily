@@ -766,12 +766,14 @@ export class LLMHelper {
   // these named entry points so the surface stays auditable.
 
   public async runVisionRequest(
-    providerId: 'natively' | 'openai' | 'claude' | 'gemini_flash_lite' | 'gemini_flash' | 'gemini_pro' | 'groq_scout' | 'custom',
+    providerId: 'hintily' | 'natively' | 'openai' | 'claude' | 'gemini_flash_lite' | 'gemini_flash' | 'gemini_pro' | 'groq_scout' | 'custom',
     userPrompt: string,
     systemPrompt: string,
     imagePath: string,
   ): Promise<string> {
     switch (providerId) {
+      case 'hintily':
+        return this.generateWithHintilyManaged(userPrompt, systemPrompt, [imagePath]);
       case 'natively':
         return this.generateWithNatively(userPrompt, systemPrompt, [imagePath]);
       case 'openai':

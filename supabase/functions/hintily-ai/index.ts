@@ -23,6 +23,8 @@ type EnforcementResult = {
 };
 type ManagedProvider =
   | { kind: 'openai'; apiKey: string; model: string }
+  | { kind: 'groq'; apiKey: string; model: string }
+  | { kind: 'claude'; apiKey: string; model: string }
   | { kind: 'gemini'; apiKey: string; model: string };
 type Image = { mimeType: string; data: string };
 
@@ -44,6 +46,28 @@ const managedProviders = (): ManagedProvider[] => {
         || 'gpt-4.1-mini',
     });
   }
+  const groqKey = Deno.env.get('HINTILY_MANAGED_GROQ_API_KEY')
+    || Deno.env.get('HINTLY_MANAGED_GROQ_API_KEY');
+  if (groqKey) {
+    providers.push({
+      kind: 'groq',
+      apiKey: groqKey,
+      model: Deno.env.get('HINTILY_MANAGED_GROQ_MODEL')
+        || Deno.env.get('HINTLY_MANAGED_GROQ_MODEL')
+        || 'meta-llama/llama-4-scout-17b-16e-instruct',
+    });
+  }
+  const claudeKey = Deno.env.get('HINTILY_MANAGED_CLAUDE_API_KEY')
+    || Deno.env.get('HINTLY_MANAGED_CLAUDE_API_KEY');
+  if (claudeKey) {
+    providers.push({
+      kind: 'claude',
+      apiKey: claudeKey,
+      model: Deno.env.get('HINTILY_MANAGED_CLAUDE_MODEL')
+        || Deno.env.get('HINTLY_MANAGED_CLAUDE_MODEL')
+        || 'claude-sonnet-4-6',
+    });
+  }
   const geminiKey = Deno.env.get('HINTILY_GEMINI_API_KEY')
     || Deno.env.get('HINTLY_GEMINI_API_KEY')
     || Deno.env.get('GEMINI_API_KEY');
@@ -56,7 +80,7 @@ const managedProviders = (): ManagedProvider[] => {
         || 'gemini-2.5-flash',
     });
   }
-  return providers.slice(0, 2);
+  return providers;
 };
 
 const providerRequest = (
@@ -67,7 +91,7 @@ const providerRequest = (
   stream: boolean,
   signal: AbortSignal,
 ) => {
-  if (provider.kind === 'openai') {
+  if (provider.kind === 'openai' || provider.kind === 'groq') {
     const content: Array<Record<string, unknown>> = [{ type: 'text', text: userText }];
     for (const image of images) {
       content.push({
@@ -75,7 +99,11 @@ const providerRequest = (
         image_url: { url: `data:${image.mimeType};base64,${image.data}` },
       });
     }
-    return fetch('https://api.openai.com/v1/chat/completions', {
+    return fetch(
+      provider.kind === 'openai'
+        ? 'https://api.openai.com/v1/chat/completions'
+        : 'https://api.groq.com/openai/v1/chat/completions',
+      {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${provider.apiKey}`,
@@ -89,6 +117,32 @@ const providerRequest = (
         ],
         temperature: 0.4,
         max_completion_tokens: 8192,
+        stream,
+      }),
+      signal,
+    });
+  }
+  if (provider.kind === 'claude') {
+    const content: Array<Record<string, unknown>> = [{ type: 'text', text: userText }];
+    for (const image of images) {
+      content.push({
+        type: 'image',
+        source: { type: 'base64', media_type: image.mimeType, data: image.data },
+      });
+    }
+    return fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': provider.apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        ...(system ? { system } : {}),
+        messages: [{ role: 'user', content }],
+        temperature: 0.4,
+        max_tokens: 8192,
         stream,
       }),
       signal,
@@ -115,8 +169,12 @@ const providerRequest = (
 };
 
 const readinessRequest = (provider: ManagedProvider) => {
-  if (provider.kind === 'openai') {
-    return fetch('https://api.openai.com/v1/chat/completions', {
+  if (provider.kind === 'openai' || provider.kind === 'groq') {
+    return fetch(
+      provider.kind === 'openai'
+        ? 'https://api.openai.com/v1/chat/completions'
+        : 'https://api.groq.com/openai/v1/chat/completions',
+      {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${provider.apiKey}`,
@@ -127,6 +185,24 @@ const readinessRequest = (provider: ManagedProvider) => {
         messages: [{ role: 'user', content: 'Reply OK' }],
         temperature: 0,
         max_completion_tokens: 2,
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(READINESS_TIMEOUT_MS),
+    });
+  }
+  if (provider.kind === 'claude') {
+    return fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': provider.apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: provider.model,
+        messages: [{ role: 'user', content: 'Reply OK' }],
+        temperature: 0,
+        max_tokens: 2,
         stream: false,
       }),
       signal: AbortSignal.timeout(READINESS_TIMEOUT_MS),
@@ -147,16 +223,22 @@ const readinessRequest = (provider: ManagedProvider) => {
 };
 
 const extractContent = (provider: ManagedProvider, payload: Record<string, unknown>) =>
-  provider.kind === 'openai'
+  provider.kind === 'openai' || provider.kind === 'groq'
     ? String((payload.choices as any[])?.[0]?.message?.content || '')
+    : provider.kind === 'claude'
+      ? (Array.isArray(payload.content) ? payload.content : [])
+        .map((part: any) => typeof part?.text === 'string' ? part.text : '')
+        .join('')
     : (Array.isArray(payload.candidates) ? payload.candidates : [])
       .flatMap((candidate: any) => candidate?.content?.parts || [])
       .map((part: any) => typeof part?.text === 'string' ? part.text : '')
       .join('');
 
 const extractStreamDelta = (provider: ManagedProvider, payload: Record<string, unknown>) =>
-  provider.kind === 'openai'
+  provider.kind === 'openai' || provider.kind === 'groq'
     ? String((payload.choices as any[])?.[0]?.delta?.content || '')
+    : provider.kind === 'claude'
+      ? String((payload.delta as any)?.text || '')
     : extractContent(provider, payload);
 
 const parseImages = (body: Record<string, unknown>) => {
@@ -230,7 +312,7 @@ const createProviderOpener = (
         if (upstream.ok && upstream.body) return { upstream, provider, attempts };
         await upstream.body?.cancel().catch(() => undefined);
       } catch {
-        // A bounded second provider is the only automatic failover. Prompt and
+        // Configured fallbacks share one bounded overall deadline. Prompt and
         // response content are deliberately never logged here.
       } finally {
         clearTimeout(attemptTimer);
@@ -295,15 +377,29 @@ Deno.serve(async (request) => {
       }
       let succeeded = false;
       try {
-        for (const provider of providers) {
-          try {
-            const readiness = await readinessRequest(provider);
-            if (readiness.ok) {
-              await readiness.body?.cancel().catch(() => undefined);
-              succeeded = true;
-              return response(200, { ready: true });
+        // Probe every configured fallback concurrently. Sequential 8-second
+        // probes can exceed the desktop's 20-second readiness deadline once
+        // three or four managed providers are configured.
+        const readinessResults = await Promise.all(
+          providers.map(async (provider) => {
+            let readiness: Response | null = null;
+            let ready = false;
+            try {
+              readiness = await readinessRequest(provider);
+              ready = readiness.ok;
+            } catch {
+              ready = false;
+            } finally {
+              await readiness?.body?.cancel().catch(() => undefined);
             }
-          } catch { /* try the one configured fallback */ }
+            return ready;
+          }),
+        );
+        // Results preserve provider order, so readiness remains deterministic
+        // even though the network probes run in parallel.
+        if (readinessResults.some(Boolean)) {
+          succeeded = true;
+          return response(200, { ready: true });
         }
         return response(503, { ready: false, error: 'managed_ai_upstream_unavailable' });
       } finally {

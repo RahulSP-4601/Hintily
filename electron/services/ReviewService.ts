@@ -19,8 +19,8 @@ import { app } from "electron"
 import fs from "fs"
 import path from "path"
 import { loadNativeModule } from "../audio/nativeModuleLoader"
-
-const NATIVELY_API_URL = (process.env.NATIVELY_API_URL || "https://api.natively.software").replace(/\/+$/, "")
+import { getHintilyConfig } from "../config/hintily"
+import { HintilyAuthService } from "./auth/HintilyAuthService"
 const REVIEW_STATE_FILE = "review-state.json"
 
 const PROMPT_FIRST_SESSION_THRESHOLD = 3
@@ -223,12 +223,7 @@ export class ReviewService {
      *  on app launch so a "Don't show again" from another install sticks. */
     async syncWithBackend(apiKey: string | null, hardwareId: string | null): Promise<void> {
         try {
-            const headers: Record<string, string> = {}
-            if (apiKey) headers["x-natively-key"] = apiKey
-            const params = new URLSearchParams()
-            if (hardwareId) params.set("hwid", hardwareId)
-            const url = `${NATIVELY_API_URL}/api/reviews/prompt-state?${params}`
-            const res = await fetch(url, { method: "GET", headers, signal: AbortSignal.timeout(8000) })
+            const res = await this.requestHintily("prompt-state", "GET")
             if (!res.ok) return
             const data = await res.json()
             if (!data?.state) return
@@ -261,18 +256,8 @@ export class ReviewService {
     /** Fire-and-forget usage sync after a session ends. */
     async reportUsage(apiKey: string | null, hardwareId: string | null, usageMs: number): Promise<void> {
         try {
-            const headers: Record<string, string> = { "Content-Type": "application/json" }
-            if (apiKey) headers["x-natively-key"] = apiKey
-            await fetch(`${NATIVELY_API_URL}/api/reviews/prompt-state`, {
-                method: "POST",
-                headers,
-                body: JSON.stringify({
-                    hardware_id: hardwareId,
-                    // Backend treats usage_ms as an INCREMENT. Send only this
-                    // session's elapsed delta, never the cumulative local total.
-                    event: { type: "session", usage_ms: Math.max(0, usageMs) },
-                }),
-                signal: AbortSignal.timeout(8000),
+            await this.requestHintily("prompt-state", "POST", {
+                event: { type: "session", usage_ms: Math.max(0, usageMs) },
             })
         } catch {
             // Best-effort.
@@ -281,14 +266,7 @@ export class ReviewService {
 
     async reportEvent(apiKey: string | null, hardwareId: string | null, event: Record<string, unknown>): Promise<void> {
         try {
-            const headers: Record<string, string> = { "Content-Type": "application/json" }
-            if (apiKey) headers["x-natively-key"] = apiKey
-            await fetch(`${NATIVELY_API_URL}/api/reviews/prompt-state`, {
-                method: "POST",
-                headers,
-                body: JSON.stringify({ hardware_id: hardwareId, event }),
-                signal: AbortSignal.timeout(8000),
-            })
+            await this.requestHintily("prompt-state", "POST", { event })
         } catch {
             // Best-effort.
         }
@@ -305,15 +283,7 @@ export class ReviewService {
         email: string | null
     }): Promise<{ ok: boolean; id?: string; error?: string; status?: number }> {
         try {
-            const headers: Record<string, string> = { "Content-Type": "application/json" }
-            if (apiKey) headers["x-natively-key"] = apiKey
-            const body = JSON.stringify({ ...payload, hardware_id: hardwareId })
-            const res = await fetch(`${NATIVELY_API_URL}/api/reviews`, {
-                method: "POST",
-                headers,
-                body,
-                signal: AbortSignal.timeout(15_000),
-            })
+            const res = await this.requestHintily("submit", "POST", payload, 15_000)
             const data = await res.json().catch(() => ({}))
             if (!res.ok || !data?.ok) {
                 return { ok: false, error: data?.errors?.[0] || data?.error || `http_${res.status}`, status: res.status }
@@ -332,15 +302,12 @@ export class ReviewService {
         display_name_publicly: boolean
     }): Promise<{ ok: boolean; error?: string; status?: number }> {
         try {
-            const headers: Record<string, string> = { "Content-Type": "application/json" }
-            if (apiKey) headers["x-natively-key"] = apiKey
-            const body = JSON.stringify({ ...payload, hardware_id: hardwareId })
-            const res = await fetch(`${NATIVELY_API_URL}/api/reviews/${reviewId}/testimonial-details`, {
-                method: "PATCH",
-                headers,
-                body,
-                signal: AbortSignal.timeout(15_000),
-            })
+            const res = await this.requestHintily(
+                `testimonial/${encodeURIComponent(reviewId)}`,
+                "PATCH",
+                payload,
+                15_000,
+            )
             const data = await res.json().catch(() => ({}))
             if (!res.ok || !data?.ok) {
                 return { ok: false, error: data?.errors?.[0] || data?.error || `http_${res.status}`, status: res.status }
@@ -353,12 +320,7 @@ export class ReviewService {
 
     async getPromptState(apiKey: string | null, hardwareId: string | null): Promise<{ ok: boolean; state?: ReviewPromptLocalState; eligible?: boolean; reason?: string }> {
         try {
-            const headers: Record<string, string> = {}
-            if (apiKey) headers["x-natively-key"] = apiKey
-            const params = new URLSearchParams()
-            if (hardwareId) params.set("hwid", hardwareId)
-            const url = `${NATIVELY_API_URL}/api/reviews/prompt-state?${params}`
-            const res = await fetch(url, { method: "GET", headers, signal: AbortSignal.timeout(8000) })
+            const res = await this.requestHintily("prompt-state", "GET")
             if (!res.ok) return { ok: false }
             const data = await res.json()
             return {
@@ -370,6 +332,29 @@ export class ReviewService {
         } catch {
             return { ok: false }
         }
+    }
+
+    private async requestHintily(
+        action: string,
+        method: "GET" | "POST" | "PATCH",
+        body?: Record<string, unknown>,
+        timeoutMs = 8_000,
+    ): Promise<Response> {
+        const config = getHintilyConfig()
+        const accessToken = HintilyAuthService.getInstance().getAccessToken()
+        if (!config.configured) throw new Error("hintily_account_unconfigured")
+        if (!accessToken) throw new Error("signed_out")
+        return fetch(`${config.supabaseUrl}/functions/v1/hintily-reviews/${action}`, {
+            method,
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                apikey: config.supabaseAnonKey,
+                "Content-Type": "application/json",
+                "X-Client-Info": "hintily-desktop",
+            },
+            ...(body ? { body: JSON.stringify(body) } : {}),
+            signal: AbortSignal.timeout(timeoutMs),
+        })
     }
 }
 

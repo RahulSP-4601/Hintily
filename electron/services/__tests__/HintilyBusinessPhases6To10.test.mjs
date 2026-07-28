@@ -57,7 +57,8 @@ test('managed AI enforces session access, real streaming, bounded failover and p
   assert.match(ai, /authenticatedClient\(request\)/);
   assert.match(ai, /\.eq\('user_id', auth\.user\.id\)/);
   assert.match(ai, /session\.status !== 'active'/);
-  assert.match(ai, /const managedProviders[\s\S]*return providers\.slice\(0, 2\)/);
+  assert.match(ai, /kind: 'openai'[\s\S]*kind: 'groq'[\s\S]*kind: 'claude'[\s\S]*kind: 'gemini'/);
+  assert.match(ai, /return providers;/);
   assert.match(ai, /PROVIDER_TOTAL_TIMEOUT_MS = 40_000/);
   assert.match(ai, /PROVIDER_ATTEMPT_START_TIMEOUT_MS = 18_000/);
   assert.match(ai, /AbortSignal\.any\(\[deadlineController\.signal, attemptController\.signal\]\)/);
@@ -68,6 +69,7 @@ test('managed AI enforces session access, real streaming, bounded failover and p
   );
   assert.match(llm, /AbortSignal\.timeout\(50_000\)/);
   assert.match(ai, /READINESS_TIMEOUT_MS = 8_000/);
+  assert.match(ai, /const readinessResults = await Promise\.all\(/);
   assert.match(ai, /max_completion_tokens: 2/);
   assert.match(ai, /maxOutputTokens: 2/);
   assert.match(ai, /action !== 'chat' && action !== 'stream'/);

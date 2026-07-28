@@ -38,6 +38,14 @@ export function buildVisionProviders(inputs: VisionProviderBuildInputs): VisionP
   const providers: VisionProviderConfig[] = [];
 
   const cloudAllowed = inputs.mode !== 'private_vision';
+  const managedHintily = credentials.getSttProvider() === 'hintily';
+
+  // Hintily production is a managed service: screenshots must travel through
+  // the same authenticated, metered session as text and STT. Never fall
+  // through to dormant BYOK/Natively/Ollama adapters in this mode.
+  if (managedHintily) {
+    return cloudAllowed ? [hintilyManaged(inputs)] : [];
+  }
 
   if (cloudAllowed) {
     providers.push(natively(credentials, inputs));
@@ -59,6 +67,20 @@ export function buildVisionProviders(inputs: VisionProviderBuildInputs): VisionP
 }
 
 // ─── Provider builders ────────────────────────────────────────────────────
+
+function hintilyManaged(inputs: VisionProviderBuildInputs): VisionProviderConfig {
+  return {
+    id: 'hintily',
+    displayName: 'Hintily AI',
+    modelId: 'managed',
+    isLocal: false,
+    isConfigured: true,
+    supportsVision: true,
+    scopeAllowsScreenshots: inputs.scopeAllowsScreenshots,
+    hint: 'hintily',
+    invoke: async (p) => callLLMHelperVision('hintily', p),
+  };
+}
 
 function natively(creds: CredentialsManager, _inputs: VisionProviderBuildInputs): VisionProviderConfig {
   const apiKey = creds.getNativelyApiKey();

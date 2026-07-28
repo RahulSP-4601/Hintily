@@ -10,6 +10,7 @@ interface PackagedPublicConfig {
   oauthCallbackUrl?: string;
   websiteUrl?: string;
   supportUrl?: string;
+  googleCalendarClientId?: string;
 }
 
 let packagedConfigCache: PackagedPublicConfig | null | undefined;
@@ -78,6 +79,7 @@ export interface HintilyConfig {
   oauthCallbackUrl: string;
   websiteUrl: string;
   supportUrl: string;
+  googleCalendarClientId: string;
   configured: boolean;
   missing: string[];
 }
@@ -111,6 +113,8 @@ export function getHintilyConfig(): HintilyConfig {
     'HINTILY_SUPPORT_URL',
     first('HINTILY_SUPPORT_URL') || clean(bundled.supportUrl) || `${websiteUrl}/support`,
   );
+  const googleCalendarClientId =
+    first('HINTILY_GOOGLE_CALENDAR_CLIENT_ID') || clean(bundled.googleCalendarClientId);
 
   const missing: string[] = [];
   if (!supabaseUrl) missing.push('HINTILY_SUPABASE_URL');
@@ -123,6 +127,7 @@ export function getHintilyConfig(): HintilyConfig {
     oauthCallbackUrl,
     websiteUrl,
     supportUrl,
+    googleCalendarClientId,
     configured: missing.length === 0,
     missing,
   };

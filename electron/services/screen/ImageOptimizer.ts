@@ -28,6 +28,7 @@ import sharp from 'sharp';
 
 export type OptimizationProfile = 'fast' | 'balanced' | 'technical' | 'best';
 export type ProviderHint =
+  | 'hintily'
   | 'openai'
   | 'claude'
   | 'gemini'
