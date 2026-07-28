@@ -12,6 +12,7 @@ import { useResolvedTheme } from '../../hooks/useResolvedTheme';
 import { isMac, getModifierSymbol } from '../../utils/platformUtils';
 import nativelyIcon from '../icon.png';
 import zoomCaptureModeScreenshot from '../../assets/zoom-capture-mode.png';
+import { LEGACY_PROVIDER_CONFIGURATION_ENABLED } from '../../config/brand';
 
 // ----------------------
 // Animations & Mocks
@@ -53,7 +54,7 @@ const MockAppInterface = () => {
                         <div className="w-8 h-8 rounded-full bg-bg-item-active flex items-center justify-center border border-border-muted overflow-hidden">
                             <img
                                 src={nativelyIcon}
-                                alt="Natively"
+                                alt="Hintily"
                                 className="w-[20px] h-[20px] object-contain"
                                 style={{ filter: isLight ? 'brightness(0)' : 'brightness(0) invert(1)', opacity: 0.9 }}
                             />
@@ -424,8 +425,8 @@ const MockPermissionsAnim = () => {
                 </div>
                 <div className="flex justify-between items-center">
                     <div className="flex items-center gap-2">
-                        <img src={nativelyIcon} alt="Natively" className="w-6 h-6 object-contain rounded drop-shadow-sm opacity-90" />
-                        <span className="text-text-primary text-sm font-medium">Natively</span>
+                        <img src={nativelyIcon} alt="Hintily" className="w-6 h-6 object-contain rounded drop-shadow-sm opacity-90" />
+                        <span className="text-text-primary text-sm font-medium">Hintily</span>
                     </div>
 
                     <motion.div
@@ -443,8 +444,8 @@ const MockPermissionsAnim = () => {
             </div>
             <div className="text-xs text-text-secondary text-center max-w-[280px]">
                 {isMac
-                    ? 'Natively requires Accessibility and Screen Recording permissions to analyze screen context.'
-                    : 'Natively will ask for microphone access the first time you start a meeting.'}
+                    ? 'Hintily requires Accessibility and Screen Recording permissions to analyze screen context.'
+                    : 'Hintily will ask for microphone access the first time you start a meeting.'}
             </div>
         </div>
     );
@@ -601,7 +602,7 @@ const MockProviderSelectionAnim = () => {
     }, []);
 
     const options = [
-        { id: 'natively', label: 'Natively API', badge: '', recommended: true, desc: 'Ultra-fast low latency transcription', color: 'indigo', icon: <img src={nativelyIcon} className={`w-[14px] h-[14px] object-contain opacity-80 ${isLight ? '' : 'filter brightness-0 invert'}`} alt="Natively" /> },
+        { id: 'natively', label: 'Hintily API', badge: '', recommended: true, desc: 'Ultra-fast low latency transcription', color: 'indigo', icon: <img src={nativelyIcon} className={`w-[14px] h-[14px] object-contain opacity-80 ${isLight ? '' : 'filter brightness-0 invert'}`} alt="Hintily" /> },
         { id: 'deepgram', label: 'Deepgram Nova-3', badge: 'Saved', recommended: false, desc: 'High-accuracy REST transcription', color: 'purple', icon: <Mic size={14} /> },
         { id: 'google', label: 'Google Cloud', badge: 'Saved', recommended: false, desc: 'gRPC streaming via Service Account', color: 'blue', icon: <Mic size={14} /> },
         { id: 'groq', label: 'Groq Whisper', badge: '', recommended: false, desc: 'Fast LPU whisper transcription', color: 'orange', icon: <Mic size={14} /> },
@@ -813,16 +814,16 @@ const SetupGuide = () => {
         {
             title: 'Grant Permissions',
             desc: isMac
-                ? 'Enable Screen Recording and Accessibility for Natively in macOS Privacy & Security.'
+                ? 'Enable Screen Recording and Accessibility for Hintily in macOS Privacy & Security.'
                 : 'Approve the microphone prompt the first time you start a meeting (Settings → Privacy → Microphone).',
         },
         {
-            title: 'Set Up Audio',
-            desc: 'Open Settings → Audio and select Natively API, or paste a Deepgram or Google key.',
+            title: 'Sign in with Google',
+            desc: 'Open Settings → Account and sign in securely with Google. New eligible users receive one single-use 20-minute session.',
         },
         {
-            title: 'Connect an AI Model',
-            desc: 'Open Settings → AI Providers and choose a built-in model, or add a Groq or OpenRouter key.',
+            title: 'Choose your access',
+            desc: 'Use your free session, purchase a 60-minute session pack, or choose an unlimited plan from the Account screen.',
         },
         {
             title: 'Personalize (Optional)',
@@ -844,7 +845,7 @@ const SetupGuide = () => {
         <div className="mb-10">
             <div className="mb-7">
                 <h3 className="text-[20px] font-bold text-text-primary tracking-tight leading-tight">Quick Start</h3>
-                <p className="text-[13px] text-text-tertiary mt-0.5">Get Natively running in four steps.</p>
+                <p className="text-[13px] text-text-tertiary mt-0.5">Get Hintily running in four steps.</p>
             </div>
 
             <div>
@@ -893,6 +894,43 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
     const { shortcuts } = useShortcuts();
     const isLight = useResolvedTheme() === 'light';
 
+    if (!LEGACY_PROVIDER_CONFIGURATION_ENABLED) {
+        return (
+            <div className="w-full h-full overflow-y-auto animated fadeIn pb-10">
+                <header className="mb-6">
+                    <h3 className="text-lg font-bold text-text-primary mb-1">Help & Setup Guide</h3>
+                    <p className="text-xs text-text-secondary">
+                        Hintily uses managed AI and transcription. You never need to enter an API key.
+                    </p>
+                </header>
+                <SetupGuide />
+                <div className="space-y-3">
+                    <div className="rounded-xl border border-border-subtle bg-bg-card p-4">
+                        <h4 className="text-sm font-semibold text-text-primary">Starting a session</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-text-secondary">
+                            Sign in with Google, open Interview Helper or Meeting mode, and start a Hintily session.
+                            AI responses and Deepgram transcription use the same authorized session.
+                        </p>
+                    </div>
+                    <div className="rounded-xl border border-border-subtle bg-bg-card p-4">
+                        <h4 className="text-sm font-semibold text-text-primary">Single-use session policy</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-text-secondary">
+                            The free session lasts up to 20 minutes and each paid session lasts up to 60 minutes.
+                            Ending early consumes that allocation and unused time does not carry forward.
+                        </p>
+                    </div>
+                    <div className="rounded-xl border border-border-subtle bg-bg-card p-4">
+                        <h4 className="text-sm font-semibold text-text-primary">Account and payments</h4>
+                        <p className="mt-1 text-xs leading-relaxed text-text-secondary">
+                            Open Settings → Account to view available sessions, purchase access through Dodo,
+                            refresh payment status, or sign out. Access is granted only after payment verification.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     // Kbd class applying theme variables natively
     const kbdClass = `px-1.5 py-0.5 rounded text-[10px] font-mono border inline-block bg-bg-item-surface border-border-subtle text-text-secondary shadow-sm`;
 
@@ -901,7 +939,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
             <header className="mb-2 shrink-0">
                 <h3 className="text-lg font-bold text-text-primary mb-1">Help & Setup Guide</h3>
                 <p className="text-xs text-text-secondary mb-2">
-                    Learn how to deeply configure Natively. Everything from providing the right API scopes to executing conversational interviews seamlessly is covered below.
+                    Learn how to deeply configure Hintily. Everything from providing the right API scopes to executing conversational interviews seamlessly is covered below.
                 </p>
             </header>
 
@@ -919,7 +957,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                             <div className="flex-1">
                                 <h4 className="text-[14px] font-bold text-text-primary mb-0.5">Want to skip the manual setup?</h4>
                                 <p className="text-[13px] text-text-secondary">
-                                    Use the <span className="font-semibold text-text-primary">Natively API</span> for an out-of-the-box experience. One-click zero-configuration usage.
+                                    Use the <span className="font-semibold text-text-primary">Hintily API</span> for an out-of-the-box experience. One-click zero-configuration usage.
                                 </p>
                             </div>
                         </div>
@@ -940,8 +978,8 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                     <div className="space-y-4">
                         <p>
                             {isMac
-                                ? 'Natively operates entirely on-device, but requires OS permissions to tap into your screen context and global keystrokes. Here is how your system should look:'
-                                : 'Natively operates entirely on-device. Windows will prompt you for microphone access the first time you start a meeting — no other OS permissions are required.'}
+                                ? 'Hintily operates entirely on-device, but requires OS permissions to tap into your screen context and global keystrokes. Here is how your system should look:'
+                                : 'Hintily operates entirely on-device. Windows will prompt you for microphone access the first time you start a meeting — no other OS permissions are required.'}
                         </p>
                         {isMac && <MockPermissionsAnim />}
                         <div className="space-y-3 mt-4">
@@ -952,7 +990,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <Mic size={14} className="text-accent-primary" /> Microphone & Speaker Loopback Selection
                                 </h5>
                                 <p className="text-[11px] opacity-90 leading-relaxed text-text-secondary">
-                                    Natively can capture both what you say and what you hear globally. At the top of the Audio Settings, use the Dropdowns to explicitly select your hardware Input (e.g. your physical microphone) and Output capture (what the speakers play). By default, Natively utilizes the <strong>System Default</strong>, so audio routing will automatically follow your OS preferences.
+                                    Hintily can capture both what you say and what you hear globally. At the top of the Audio Settings, use the Dropdowns to explicitly select your hardware Input (e.g. your physical microphone) and Output capture (what the speakers play). By default, Hintily utilizes the <strong>System Default</strong>, so audio routing will automatically follow your OS preferences.
                                 </p>
                             </div>
 
@@ -993,7 +1031,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <h4 className={`font-semibold text-sm mb-2 text-text-primary flex items-center gap-2`}>
                                         <Monitor className="w-4 h-4 text-accent-primary" /> Screen Recording
                                     </h4>
-                                    <p className="text-xs opacity-90 mb-2">Provides Natively the ability to read your screen temporarily when you capture context.</p>
+                                    <p className="text-xs opacity-90 mb-2">Provides Hintily the ability to read your screen temporarily when you capture context.</p>
                                     <p className="text-[11px] text-text-tertiary">System Settings &gt; Privacy & Security &gt; Screen Recording</p>
                                 </div>
 
@@ -1001,7 +1039,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <h4 className={`font-semibold text-sm mb-2 text-text-primary flex items-center gap-2`}>
                                         <Command className="w-4 h-4 text-purple-500" /> Accessibility
                                     </h4>
-                                    <p className="text-xs opacity-90 mb-2">Required for Natively to detect the global keyboard shortcuts below, regardless of what window is focused.</p>
+                                    <p className="text-xs opacity-90 mb-2">Required for Hintily to detect the global keyboard shortcuts below, regardless of what window is focused.</p>
                                     <p className="text-[11px] text-text-tertiary">System Settings &gt; Privacy & Security &gt; Accessibility</p>
                                 </div>
                             </div>
@@ -1021,7 +1059,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
 
                 <AccordionSection title="2. Audio STT Providers Setup (Microphone)" icon={<Mic className="w-4 h-4" />}>
                     <div className="space-y-6">
-                        <p>Natively supports over 8 different Audio engines to transcribe what you hear and say. From the Audio tab in settings, use the overarching dropdown to switch the active engine.</p>
+                        <p>Hintily supports over 8 different Audio engines to transcribe what you hear and say. From the Audio tab in settings, use the overarching dropdown to switch the active engine.</p>
 
                         <MockProviderSelectionAnim />
 
@@ -1138,7 +1176,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
 
                 <AccordionSection title="3. AI Providers & Prompt Engine" icon={<Key className="w-4 h-4" />}>
                     <div className="space-y-4">
-                        <p className="text-sm">Natively uses Large Language Models (LLMs) to reason about your screen and audio context. You can configure cloud providers, local models, or fully custom endpoints.</p>
+                        <p className="text-sm">Hintily uses Large Language Models (LLMs) to reason about your screen and audio context. You can configure cloud providers, local models, or fully custom endpoints.</p>
 
                         <div className="space-y-3 pt-2">
                             <h4 className="font-bold text-lg text-text-primary border-b border-border-subtle pb-2">1. Standard Cloud Providers</h4>
@@ -1191,7 +1229,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <Zap className="w-4 h-4 text-accent-primary" />
                                 </div>
                                 <p className="text-[11px] text-text-secondary leading-relaxed mt-0.5">
-                                    <strong className="text-text-primary font-bold">Autonomous Registry Sync:</strong> Natively utilizes a 14-day background sync clock (<span className="font-mono bg-bg-elevated border border-border-muted px-1.5 py-0.5 rounded text-[10px] text-text-primary shadow-[inset_0_-1px_0_rgba(0,0,0,0.1)]">v2/api/models</span>) to silently poll upstream APIs. If Anthropic or OpenAI drops a new flagship architecture (e.g. GPT-5), your app dynamically absorbs it into the UI dropdown automatically.
+                                    <strong className="text-text-primary font-bold">Autonomous Registry Sync:</strong> Hintily utilizes a 14-day background sync clock (<span className="font-mono bg-bg-elevated border border-border-muted px-1.5 py-0.5 rounded text-[10px] text-text-primary shadow-[inset_0_-1px_0_rgba(0,0,0,0.1)]">v2/api/models</span>) to silently poll upstream APIs. If Anthropic or OpenAI drops a new flagship architecture (e.g. GPT-5), your app dynamically absorbs it into the UI dropdown automatically.
                                 </p>
                             </div>
 
@@ -1207,7 +1245,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                             <h4 className="font-bold text-lg text-text-primary border-b border-border-subtle pb-2">2. Local Models (Ollama)</h4>
                             <div className="p-4 rounded-xl border bg-bg-item-surface border-border-subtle space-y-3">
                                 <p className="text-xs opacity-90 leading-relaxed text-text-secondary">
-                                    You can run Natively completely offline with 100% data privacy using Ollama. Natively automatically scans <span className={kbdClass}>http://localhost:11434</span> for active models.
+                                    You can run Hintily completely offline with 100% data privacy using Ollama. Hintily automatically scans <span className={kbdClass}>http://localhost:11434</span> for active models.
                                 </p>
                                 <ol className="list-decimal pl-4 text-xs space-y-2 opacity-90 text-text-secondary">
                                     <li>Download Ollama locally via <button onClick={() => { (window as any).electronAPI?.openExternal('https://ollama.com/download') }} className="text-accent-primary hover:underline inline-flex items-center gap-1 font-medium">ollama.com <ExternalLink size={10} /></button></li>
@@ -1218,7 +1256,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <li>Alternatively, for faster generation without GPU, use Microsoft's smaller model:
                                         <div className="mt-1 bg-bg-input p-2 rounded border border-border-subtle font-mono text-[11px]">ollama run phi3</div>
                                     </li>
-                                    <li>Return to Natively's AI Providers overlay, and you will see your Local models ready for usage.</li>
+                                    <li>Return to Hintily's AI Providers overlay, and you will see your Local models ready for usage.</li>
                                 </ol>
                             </div>
                         </div>
@@ -1239,7 +1277,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                 <div className="flex items-start gap-2 mt-2">
                                     <div className="w-5 h-5 rounded bg-orange-500/20 text-orange-500 flex items-center justify-center shrink-0 mt-0.5"><Zap size={10} /></div>
                                     <div className="text-xs text-text-secondary leading-relaxed">
-                                        <strong>Crucial: The Response Path.</strong> You must inform Natively how to parse the JSON text back. Deeply nested outputs must define the exact path array. For OpenAI/OpenRouter compliant endpoints, this is strictly: <span className={kbdClass}>choices[0].message.content</span>.
+                                        <strong>Crucial: The Response Path.</strong> You must inform Hintily how to parse the JSON text back. Deeply nested outputs must define the exact path array. For OpenAI/OpenRouter compliant endpoints, this is strictly: <span className={kbdClass}>choices[0].message.content</span>.
                                     </div>
                                 </div>
                             </div>
@@ -1248,9 +1286,9 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                     </div>
                 </AccordionSection>
 
-                <AccordionSection title="4. Natively Interface Operations" icon={<Monitor className="w-4 h-4" />}>
+                <AccordionSection title="4. Hintily Interface Operations" icon={<Monitor className="w-4 h-4" />}>
                     <div className="space-y-6">
-                        <p className="text-[13px]">When initialized, Natively hides itself visually while remaining active as a persistent translucent overlay. This is your command center.</p>
+                        <p className="text-[13px]">When initialized, Hintily hides itself visually while remaining active as a persistent translucent overlay. This is your command center.</p>
 
                         <div className="relative w-full flex flex-col p-2 sm:p-5 bg-bg-main rounded-[26px] border border-border-subtle shadow-inner">
                             <MockAppInterface />
@@ -1347,7 +1385,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <FileText className="w-4 h-4 text-accent-primary group-hover:scale-110 transition-transform" /> Summary Execution
                                 </h4>
                                 <p className="text-[12px] text-text-secondary leading-relaxed">
-                                    Natively fires a local background job as soon as the meeting finishes to compress the entire raw audio transcript into clean, formatted markdown representing structural overviews and explicit action items.
+                                    Hintily fires a local background job as soon as the meeting finishes to compress the entire raw audio transcript into clean, formatted markdown representing structural overviews and explicit action items.
                                 </p>
                             </div>
 
@@ -1403,7 +1441,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
 
                 <AccordionSection title="6. Global Search & Shortcuts" icon={<Search className="w-4 h-4" />}>
                     <div className="space-y-6">
-                        <p className="text-[13px]">Hit <span className={kbdClass}>{isMac ? 'Cmd+K' : 'Ctrl+K'}</span> anywhere on your computer to invoke the Natively Global Palette. This acts as your Spotlight overlay for interacting directly with the system backbone.</p>
+                        <p className="text-[13px]">Hit <span className={kbdClass}>{isMac ? 'Cmd+K' : 'Ctrl+K'}</span> anywhere on your computer to invoke the Hintily Global Palette. This acts as your Spotlight overlay for interacting directly with the system backbone.</p>
 
                         <MockSearchPillAnim />
 
@@ -1429,7 +1467,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
 
                         <div className="border-t border-border-subtle pt-6">
                             <h4 className="font-bold text-sm text-text-primary border-b border-border-subtle pb-1">Global System Shortcuts</h4>
-                            <p className="text-[11px] text-text-secondary mt-1 mb-3">These hotkeys work anywhere on your operating system, regardless of whether Natively is focused or completely hidden. Change them via <strong>Settings &gt; Hotkeys</strong>.</p>
+                            <p className="text-[11px] text-text-secondary mt-1 mb-3">These hotkeys work anywhere on your operating system, regardless of whether Hintily is focused or completely hidden. Change them via <strong>Settings &gt; Hotkeys</strong>.</p>
 
                             <div className="grid gap-3">
                                 <div className="flex items-center justify-between p-4 rounded-xl border bg-bg-item-surface border-border-subtle group">
@@ -1469,7 +1507,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                         </div>
                                         <div>
                                             <div className="font-semibold text-sm text-text-primary">Process Captured Context (Execute)</div>
-                                            <div className="text-xs text-text-secondary mt-1">Triggers Natively to analyze the captured screenshots and text from the rolling buffer.</div>
+                                            <div className="text-xs text-text-secondary mt-1">Triggers Hintily to analyze the captured screenshots and text from the rolling buffer.</div>
                                         </div>
                                     </div>
                                     <div className="flex gap-1 shrink-0">
@@ -1528,10 +1566,10 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                         <CreditCard className="w-4 h-4 text-accent-primary" /> Pro Requirement
                                     </h4>
                                     <p className="text-[11px] text-text-secondary mb-2">
-                                        This is a Natively Pro feature.
+                                        This is a Hintily Pro feature.
                                     </p>
                                     <ol className="text-[11px] text-text-secondary space-y-1 list-decimal pl-4 mb-0">
-                                        <li>Get a License at <button onClick={() => { (window as any).electronAPI?.openExternal('https://natively.software/') }} className="text-accent-primary hover:underline font-semibold">natively.software</button></li>
+                                        <li>Get a License at <button onClick={() => { (window as any).electronAPI?.openExternal('https://hintily.app/') }} className="text-accent-primary hover:underline font-semibold">hintily.app</button></li>
                                         <li>Drop your Resume PDF in the UI to activate injection.</li>
                                     </ol>
                                 </div>
@@ -1544,7 +1582,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <Briefcase size={14} /> Job Description Targeting
                                 </h4>
                                 <p className="text-[11px] text-text-secondary leading-relaxed mb-0">
-                                    Drop a target <strong>JD PDF</strong> alongside your resume. Natively extracts the role title, level, company, and required technologies, then biases every prompt to align your responses with that exact spec — perfect for staying on-message during a final loop.
+                                    Drop a target <strong>JD PDF</strong> alongside your resume. Hintily extracts the role title, level, company, and required technologies, then biases every prompt to align your responses with that exact spec — perfect for staying on-message during a final loop.
                                 </p>
                             </div>
 
@@ -1605,7 +1643,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
 
                 <AccordionSection title="8. Modes Manager" icon={<LayoutGrid className="w-4 h-4" />}>
                     <div className="space-y-6">
-                        <p className="text-[13px]">Modes let you assign a specialized AI persona to your session. Each mode has a tailored system prompt, a personal context area, reference files, and smart note template sections — so Natively behaves differently depending on whether you're in a sales call, a coding interview, or a team standup.</p>
+                        <p className="text-[13px]">Modes let you assign a specialized AI persona to your session. Each mode has a tailored system prompt, a personal context area, reference files, and smart note template sections — so Hintily behaves differently depending on whether you're in a sales call, a coding interview, or a team standup.</p>
 
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                             {([
@@ -1631,7 +1669,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <ul className="text-[11px] text-text-secondary space-y-1 list-disc pl-4">
                                         <li>Click the <strong>grid icon</strong> in the Launcher header</li>
                                         <li>Or click the grid icon in the main interface toolbar</li>
-                                        <li>Requires a Natively Pro license</li>
+                                        <li>Requires a Hintily Pro license</li>
                                     </ul>
                                 </div>
                                 <div className="p-4 rounded-xl border bg-bg-item-surface border-border-subtle">
@@ -1669,7 +1707,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                 <Star size={14} /> Pro Feature
                             </h4>
                             <p className="text-[11px] text-text-secondary leading-relaxed mb-0">
-                                Modes are locked behind Natively Pro. Free and trial users see only the General mode. Activate a license via <strong>Settings → Natively API</strong> to unlock all seven modes.
+                                Modes are locked behind Hintily Pro. Free and trial users see only the General mode. Activate a license via <strong>Settings → Hintily API</strong> to unlock all seven modes.
                             </p>
                         </div>
                     </div>
@@ -1684,7 +1722,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <Calendar size={14} /> What is Calendar Intelligence?
                                 </h4>
                                 <p className="text-[11px] text-text-secondary leading-relaxed mb-0">
-                                    By connecting your Google Calendar directly to Natively, the AI automatically gains context on your upcoming meetings, syncs the event data, and reads attendee lists to hyper-personalize your interactions.
+                                    By connecting your Google Calendar directly to Hintily, the AI automatically gains context on your upcoming meetings, syncs the event data, and reads attendee lists to hyper-personalize your interactions.
                                 </p>
                             </div>
 
@@ -1694,13 +1732,13 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <ul className="text-[11px] text-text-secondary space-y-1 list-disc pl-4">
                                         <li>Navigate to the <strong>Calendar</strong> tab in settings.</li>
                                         <li>Click <strong>Connect Google Calendar</strong> and authenticate securely.</li>
-                                        <li>Natively will quietly background-sync your schedule.</li>
+                                        <li>Hintily will quietly background-sync your schedule.</li>
                                     </ul>
                                 </div>
                                 <div className="p-4 rounded-xl border bg-bg-item-surface border-border-subtle">
                                     <h4 className="font-semibold text-sm mb-2 text-text-primary">Follow-Up System</h4>
                                     <p className="text-[11px] text-text-secondary">
-                                        When tracking live meetings, Natively uses the connected calendar context to instantly figure out <strong>who you are talking to</strong>. This powers the Follow-Up Email system, letting you auto-draft post-meeting notes to confirmed attendees.
+                                        When tracking live meetings, Hintily uses the connected calendar context to instantly figure out <strong>who you are talking to</strong>. This powers the Follow-Up Email system, letting you auto-draft post-meeting notes to confirmed attendees.
                                     </p>
                                 </div>
                                 <div className="p-4 rounded-xl border bg-bg-item-surface border-border-subtle">
@@ -1746,10 +1784,10 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                     <div className="space-y-4">
                         <div className="p-3 bg-sky-500/10 border border-sky-500/20 rounded-xl mb-2">
                             <h4 className="text-[13px] font-semibold text-sky-400 flex items-center gap-2 mb-1">
-                                <Smartphone size={14} /> Stream Natively to Your Phone
+                                <Smartphone size={14} /> Stream Hintily to Your Phone
                             </h4>
                             <p className="text-[11px] text-text-secondary leading-relaxed mb-0">
-                                Phone Mirror spins up a small local web server so you can watch Natively's live transcript and AI answers from your phone or tablet — handy when your screen is being shared and you don't want the overlay visible.
+                                Phone Mirror spins up a small local web server so you can watch Hintily's live transcript and AI answers from your phone or tablet — handy when your screen is being shared and you don't want the overlay visible.
                             </p>
                         </div>
 
@@ -1789,7 +1827,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                 <Ghost size={14} /> Process Disguise & Undetectability
                             </h4>
                             <p className="text-[11px] text-text-secondary leading-relaxed mb-0">
-                                Natively is heavily geared towards power users seeking minimalistic operation. The process completely disguises itself and remains undetectable/invisible to standard screen-recording applications and desktop sharing utilities.
+                                Hintily is heavily geared towards power users seeking minimalistic operation. The process completely disguises itself and remains undetectable/invisible to standard screen-recording applications and desktop sharing utilities.
                             </p>
                         </div>
 
@@ -1812,7 +1850,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                 </p>
                                 <div className="p-2 border border-orange-500/20 bg-orange-500/5 rounded-lg">
                                     <p className="text-[10px] text-orange-400 m-0">
-                                        <strong>⚠️ Warning:</strong> This renders the Natively overlay completely unclickable. You MUST memorize the Global Hotkeys (e.g. <strong>{isMac ? 'Cmd' : 'Ctrl'}+Shift+Arrows</strong> to move, <strong>{isMac ? 'Cmd' : 'Ctrl'}+B</strong> to hide, <strong>{isMac ? 'Cmd' : 'Ctrl'}+1-7</strong> for actions) to control the application once this is active.
+                                        <strong>⚠️ Warning:</strong> This renders the Hintily overlay completely unclickable. You MUST memorize the Global Hotkeys (e.g. <strong>{isMac ? 'Cmd' : 'Ctrl'}+Shift+Arrows</strong> to move, <strong>{isMac ? 'Cmd' : 'Ctrl'}+B</strong> to hide, <strong>{isMac ? 'Cmd' : 'Ctrl'}+1-7</strong> for actions) to control the application once this is active.
                                     </p>
                                 </div>
                             </div>
@@ -1822,7 +1860,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     <EyeOff className="w-4 h-4 text-text-secondary" /> Zoom Screen Share (One Setting Required)
                                 </h4>
                                 <p className="text-[11px] text-text-secondary mb-3">
-                                    Google Meet, Microsoft Teams, and QuickTime hide Natively automatically — nothing to configure. Zoom is the one exception: whether it respects Natively's "don't capture me" flag depends on a single setting.
+                                    Google Meet, Microsoft Teams, and QuickTime hide Hintily automatically — nothing to configure. Zoom is the one exception: whether it respects Hintily's "don't capture me" flag depends on a single setting.
                                 </p>
                                 <p className="text-[11px] text-text-secondary mb-3">
                                     Go to <strong>Zoom → Settings → Share Screen → Advanced → Screen capture mode</strong> and choose <strong>"Advanced capture with window filtering."</strong>
@@ -1833,7 +1871,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                     className="w-full max-w-[480px] mx-auto rounded-lg border border-border-subtle shadow-sm block mb-3"
                                 />
                                 <p className="text-[11px] text-text-secondary mb-0">
-                                    The "...with window filtering" modes tell Zoom to leave out windows that mark themselves as private, which is exactly what Natively does. <strong>"Advanced capture without window filtering"</strong> grabs the raw screen and will show Natively, so avoid it.
+                                    The "...with window filtering" modes tell Zoom to leave out windows that mark themselves as private, which is exactly what Hintily does. <strong>"Advanced capture without window filtering"</strong> grabs the raw screen and will show Hintily, so avoid it.
                                 </p>
                             </div>
                         </div>
@@ -1847,7 +1885,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                 <Brain size={14} /> Cross-Meeting Memory Infrastructure
                             </h4>
                             <p className="text-[11px] text-text-secondary leading-relaxed mb-0">
-                                Hindsight is a local or cloud-based sidecar service that acts as Natively's vector database. It indexes past meeting transcript segments, custom profiles, and documents to make them queryable via semantic vector search.
+                                Hindsight is a local or cloud-based sidecar service that acts as Hintily's vector database. It indexes past meeting transcript segments, custom profiles, and documents to make them queryable via semantic vector search.
                             </p>
                         </div>
 
@@ -1870,7 +1908,7 @@ export const HelpSettings: React.FC<{ onNavigate?: (tab: string) => void }> = ({
                                         </button>
                                     </li>
                                     <li>Create a new <strong>Memory Bank</strong> in the Hindsight Dashboard to obtain your <strong>API Access Key</strong>.</li>
-                                    <li>In Natively desktop: open <strong>Settings → Intelligence</strong>.</li>
+                                    <li>In Hintily desktop: open <strong>Settings → Intelligence</strong>.</li>
                                     <li>Set the Base URL to: <code className="bg-bg-elevated px-1 font-mono text-[10px]">https://api.hindsight.vectorize.io/v1</code>.</li>
                                     <li>Enter your Hindsight <strong>API Access Key</strong>, click <strong>Test Connection</strong>, and enable <strong>Long-term memory</strong>.</li>
                                 </ol>
@@ -1904,7 +1942,7 @@ hindsight-api`}
                                         </code>
                                     </div>
                                     <p className="text-[10px] text-text-muted mt-1 leading-relaxed">
-                                        Once running, access the local dashboard UI at <code className="bg-bg-elevated px-1 font-mono text-[9px]">http://localhost:9999</code>. In Natively settings, set the Base URL to <code className="bg-bg-elevated px-1 font-mono text-[9px]">http://localhost:8888</code>.
+                                        Once running, access the local dashboard UI at <code className="bg-bg-elevated px-1 font-mono text-[9px]">http://localhost:9999</code>. In Hintily settings, set the Base URL to <code className="bg-bg-elevated px-1 font-mono text-[9px]">http://localhost:8888</code>.
                                     </p>
                                 </div>
                             </div>
@@ -1915,12 +1953,12 @@ hindsight-api`}
                                     <FileText className="w-4 h-4 text-purple-400" /> Option C: Monorepo Developer Sidecar
                                 </h4>
                                 <p className="text-[11px] text-text-secondary leading-relaxed mb-3">
-                                    Quickly start a local developer instance using the scripts packaged with Natively:
+                                    Quickly start a local developer instance using the scripts packaged with Hintily:
                                 </p>
                                 <ol className="text-[11px] text-text-secondary space-y-1 list-decimal pl-4">
                                     <li>Install the embedded server package (Python 3.11+): <code className="bg-bg-elevated px-1 font-mono text-[10px]">pip install hindsight-all</code> (Intel Macs: <code className="bg-bg-elevated px-1 font-mono text-[10px]">hindsight-all-slim</code>).</li>
-                                    <li>From the Natively project folder, run the bundled launcher: <code className="bg-bg-elevated px-1 font-mono text-[10px]">bash scripts/hindsight-start.sh</code>. It starts the embedded memory server (bundled Postgres + pgvector, no Docker) on port 8888 and wires your AI provider chain + fallback automatically.</li>
-                                    <li>Set Natively Base URL to <code className="bg-bg-elevated px-1 font-mono text-[10px]">http://localhost:8888</code> and toggle on memory.</li>
+                                    <li>From the Hintily project folder, run the bundled launcher: <code className="bg-bg-elevated px-1 font-mono text-[10px]">bash scripts/hindsight-start.sh</code>. It starts the embedded memory server (bundled Postgres + pgvector, no Docker) on port 8888 and wires your AI provider chain + fallback automatically.</li>
+                                    <li>Set Hintily Base URL to <code className="bg-bg-elevated px-1 font-mono text-[10px]">http://localhost:8888</code> and toggle on memory.</li>
                                 </ol>
                             </div>
                         </div>
@@ -1934,7 +1972,7 @@ hindsight-api`}
                                 <CheckCircle2 size={14} /> Execution-Based Answer Verification
                             </h4>
                             <p className="text-[11px] text-text-secondary leading-relaxed mb-0">
-                                When a coding question is answered, Natively extracts code blocks and executes them inside isolated local sandboxed processes to verify their logical correctness. Code blocks receive a "Verified ✓" badge once tested.
+                                When a coding question is answered, Hintily extracts code blocks and executes them inside isolated local sandboxed processes to verify their logical correctness. Code blocks receive a "Verified ✓" badge once tested.
                             </p>
                         </div>
 
@@ -1964,7 +2002,7 @@ hindsight-api`}
                                     <Sparkles className="w-4 h-4 text-amber-500" /> One-Shot Code Corrector
                                 </h4>
                                 <p className="text-[11px] text-text-secondary leading-relaxed">
-                                    If a sandboxed code block fails to compile or yields runtime errors, Natively initiates a background correction request to the reasoning model, supplying the execution error logs. The corrected code is streamed back to your interface automatically.
+                                    If a sandboxed code block fails to compile or yields runtime errors, Hintily initiates a background correction request to the reasoning model, supplying the execution error logs. The corrected code is streamed back to your interface automatically.
                                 </p>
                             </div>
                         </div>
@@ -1978,7 +2016,7 @@ hindsight-api`}
                                 <Smartphone size={14} /> Active Tab Context Capture
                             </h4>
                             <p className="text-[11px] text-text-secondary leading-relaxed mb-0">
-                                The Natively browser extension (Manifest V3) allows you to securely send the active browser tab's text content and source code to the Natively desktop app. It only communicates over your local loopback.
+                                The Hintily browser extension (Manifest V3) allows you to securely send the active browser tab's text content and source code to the Hintily desktop app. It only communicates over your local loopback.
                             </p>
                         </div>
 
@@ -2018,14 +2056,14 @@ hindsight-api`}
 
                             <div className="p-4 rounded-xl border bg-bg-item-surface border-border-subtle group">
                                 <h4 className="font-semibold text-sm mb-2 text-text-primary flex items-center gap-2">
-                                    <Zap className="w-4 h-4 text-amber-500" /> 2. Pair with Natively Desktop
+                                    <Zap className="w-4 h-4 text-amber-500" /> 2. Pair with Hintily Desktop
                                 </h4>
                                 <p className="text-[11px] text-text-secondary leading-relaxed mb-3">
                                     Establish a secure paired loopback connection (done only once):
                                 </p>
                                 <ol className="text-[11px] text-text-secondary space-y-1 list-decimal pl-4">
-                                    <li>In Natively desktop: go to <strong>Settings → Sync</strong>, ensure Phone Mirror is running, and under the **Browser Extension** card click <strong>Connect browser extension</strong> (arms pairing for 60s).</li>
-                                    <li>In your browser: click the Natively extension toolbar icon, then click <strong>Connect to Natively</strong>.</li>
+                                    <li>In Hintily desktop: go to <strong>Settings → Sync</strong>, ensure Phone Mirror is running, and under the **Browser Extension** card click <strong>Connect browser extension</strong> (arms pairing for 60s).</li>
+                                    <li>In your browser: click the Hintily extension toolbar icon, then click <strong>Connect to Hintily</strong>.</li>
                                     <li>Once paired, the connection status shows a green dot ("Connected — capture ready").</li>
                                 </ol>
                             </div>
@@ -2036,7 +2074,7 @@ hindsight-api`}
                                 </h4>
                                 <ul className="text-[11px] text-text-secondary space-y-2 list-disc pl-4">
                                     <li>
-                                        <strong>Global Hotkey (Recommended):</strong> Press <kbd className="bg-bg-elevated px-1.5 py-0.5 rounded border text-[10.5px] border-border-subtle font-sans">{isMac ? '⌘' : 'Ctrl'}+Shift+Y</kbd> anywhere on your system. Natively pulls DOM context automatically; if the browser isn't active/reachable, it defaults to a screenshot automatically.
+                                        <strong>Global Hotkey (Recommended):</strong> Press <kbd className="bg-bg-elevated px-1.5 py-0.5 rounded border text-[10.5px] border-border-subtle font-sans">{isMac ? '⌘' : 'Ctrl'}+Shift+Y</kbd> anywhere on your system. Hintily pulls DOM context automatically; if the browser isn't active/reachable, it defaults to a screenshot automatically.
                                     </li>
                                     <li>
                                         <strong>Manual Capture:</strong> Open the extension toolbar popup and click <strong>Capture this page</strong>.
@@ -2054,7 +2092,7 @@ hindsight-api`}
                                 <Sparkles size={14} /> Conversational Polish & Context Awareness
                             </h4>
                             <p className="text-[11px] text-text-secondary leading-relaxed mb-0">
-                                Natively implements real-time session tracking, entity extraction, and stylistic rewriting. This ensures responses refer correctly to prior chat context and sound completely natural when read aloud, without robotic or repetitive patterns.
+                                Hintily implements real-time session tracking, entity extraction, and stylistic rewriting. This ensures responses refer correctly to prior chat context and sound completely natural when read aloud, without robotic or repetitive patterns.
                             </p>
                         </div>
 
@@ -2064,10 +2102,10 @@ hindsight-api`}
                                     <Brain className="w-4 h-4 text-purple-500" /> Time-Aware Session Memory & Entity Resolver
                                 </h4>
                                 <p className="text-[11px] text-text-secondary leading-relaxed mb-3">
-                                    As meetings progress, Natively monitors speaker turns and extracts key entities (such as projects, skills, and compensation):
+                                    As meetings progress, Hintily monitors speaker turns and extracts key entities (such as projects, skills, and compensation):
                                 </p>
                                 <ul className="text-[11px] text-text-secondary space-y-2 list-disc pl-4">
-                                    <li><strong>Demonstrative Follow-ups:</strong> If you ask "Tell me more about <em>that project</em>", Natively resolves the pronoun to the specific project name discussed previously (e.g. "Natively").</li>
+                                    <li><strong>Demonstrative Follow-ups:</strong> If you ask "Tell me more about <em>that project</em>", Hintily resolves the pronoun to the specific project name discussed previously (e.g. "Hintily").</li>
                                     <li><strong>Time-Decayed Salience:</strong> Entities fade in priority based on a half-life recency calculation (measured in seconds), keeping the AI focused on the most active discussion topic.</li>
                                     <li><strong>Mode-Aware Routing:</strong> Access is restricted based on mode boundaries (e.g., Coding Mode blocks resume/project history; Negotiation Mode is the only mode permitted to fetch compensation/salary details).</li>
                                 </ul>

@@ -35,7 +35,10 @@ import { getMeetingInterfaceTheme, setMeetingInterfaceTheme, type MeetingInterfa
 import { KeyRecorder } from './ui/KeyRecorder';
 import { ProfileVisualizer, PremiumUpgradeModal } from '../premium';
 import icon from './icon.png';
-import { LEGACY_NATIVELY_COMMERCE_ENABLED } from '../config/brand';
+import {
+    LEGACY_NATIVELY_COMMERCE_ENABLED,
+    LEGACY_PROVIDER_CONFIGURATION_ENABLED,
+} from '../config/brand';
 
 // ---------------------------------------------------------------------------
 // StarRating — renders filled/empty stars for culture ratings
@@ -65,7 +68,7 @@ const MockupNativelyInterface = ({ opacity }: { opacity: number }) => {
                             <div className="w-8 h-8 rounded-full flex items-center justify-center overflow-hidden overlay-icon-surface" style={appearance.iconStyle}>
                                 <img
                                     src={icon}
-                                    alt="Natively"
+                                    alt="Hintily"
                                     className="w-[24px] h-[24px] object-contain opacity-95 scale-105 force-black-icon"
                                     draggable="false"
                                 />
@@ -369,7 +372,10 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
     initialHasNativelyKey = false,
 }) => {
     const normalizeHintilyTab = (tab: string) =>
-        tab === 'natively-api' || tab === 'natively-pro' ? 'account' : tab;
+        tab === 'natively-api' || tab === 'natively-pro'
+        || (!LEGACY_PROVIDER_CONFIGURATION_ENABLED && tab === 'ai-providers')
+            ? 'account'
+            : tab;
     const isLight = useResolvedTheme() === 'light';
     const { t, lang, setLang } = useLanguage();
     const [activeTab, setActiveTab] = useState(normalizeHintilyTab(initialTab));
@@ -1478,12 +1484,14 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                     >
                                         <Monitor size={16} /> {t('General')}
                                     </button>
-                                    <button
-                                        onClick={() => setActiveTab('ai-providers')}
-                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 relative ${activeTab === 'ai-providers' ? "bg-bg-item-active text-text-primary before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-[2px] before:rounded-full before:bg-accent-primary" : "text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50"}`}
-                                    >
-                                        <FlaskConical size={16} /> {t('AI Providers')}
-                                    </button>
+                                    {LEGACY_PROVIDER_CONFIGURATION_ENABLED && (
+                                        <button
+                                            onClick={() => setActiveTab('ai-providers')}
+                                            className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 relative ${activeTab === 'ai-providers' ? "bg-bg-item-active text-text-primary before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-[2px] before:rounded-full before:bg-accent-primary" : "text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50"}`}
+                                        >
+                                            <FlaskConical size={16} /> {t('AI Providers')}
+                                        </button>
+                                    )}
                                     <button
                                         onClick={() => setActiveTab('skills')}
                                         className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 relative ${activeTab === 'skills' ? "bg-bg-item-active text-text-primary before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-[2px] before:rounded-full before:bg-accent-primary" : "text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50"}`}
@@ -1598,7 +1606,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                         <div>
                                                             <h3 className="text-sm font-bold text-text-primary">{isUndetectable ? t('Undetectable') : t('Detectable')}</h3>
                                                             <p className="text-xs text-text-secondary mt-0.5">
-                                                                {isUndetectable ? t('Natively is currently undetectable by screen-sharing.') : t('Natively is currently detectable by screen-sharing.')} <button onClick={() => window.electronAPI?.openExternal?.('https://natively.software/supportedapps')} className="text-accent-primary hover:underline">{t('Supported apps here')}</button>
+                                                                {isUndetectable ? t('Hintily is currently undetectable by screen-sharing.') : t('Hintily is currently detectable by screen-sharing.')} <button onClick={() => window.electronAPI?.openExternal?.('https://hintily.app/supported-apps')} className="text-accent-primary hover:underline">{t('Supported apps here')}</button>
                                                             </p>
                                                         </div>
                                                     </div>
@@ -1648,8 +1656,8 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                             <Power size={20} />
                                                         </div>
                                                         <div>
-                                                            <h3 className="text-sm font-bold text-text-primary">{t('Open Natively when you log in')}</h3>
-                                                            <p className="text-xs text-text-secondary mt-0.5">{t('Natively will open automatically when you log in to your computer')}</p>
+                                                            <h3 className="text-sm font-bold text-text-primary">{t('Open Hintily when you log in')}</h3>
+                                                            <p className="text-xs text-text-secondary mt-0.5">{t('Hintily will open automatically when you log in to your computer')}</p>
                                                         </div>
                                                     </div>
                                                     <div
@@ -1864,7 +1872,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                         </div>
                                                         <div>
                                                             <h3 className="text-sm font-bold text-text-primary">{t('Theme')}</h3>
-                                                            <p className="text-xs text-text-secondary mt-0.5">{t('Customize how Natively looks on your device')}</p>
+                                                            <p className="text-xs text-text-secondary mt-0.5">{t('Customize how Hintily looks on your device')}</p>
                                                         </div>
                                                     </div>
 
@@ -1974,7 +1982,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                         </div>
                                                         <div>
                                                             <h3 className="text-sm font-bold text-text-primary">{t('Language')}</h3>
-                                                            <p className="text-xs text-text-secondary mt-0.5">{t('Interface language for Natively')}</p>
+                                                            <p className="text-xs text-text-secondary mt-0.5">{t('Interface language for Hintily')}</p>
                                                         </div>
                                                     </div>
 
@@ -2028,7 +2036,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                         <div>
                                                             <h3 className="text-sm font-bold text-text-primary">{t('Version')}</h3>
                                                             <p className="text-xs text-text-secondary mt-0.5">
-                                                                {t('You are currently using Natively version')} {packageJson.version}
+                                                                {t('You are currently using Hintily version')} {packageJson.version}
                                                             </p>
                                                         </div>
                                                     </div>
@@ -2162,7 +2170,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                                 <h3 className="text-lg font-bold text-text-primary">{t('Process Disguise')}</h3>
                                             </div>
                                             <p className="text-xs text-text-secondary">
-                                                {t('Disguise Natively as another application to prevent detection during screen sharing.')}
+                                                {t('Disguise Hintily as another application to prevent detection during screen sharing.')}
                                                 <span className="block mt-1 text-text-tertiary">
                                                     {t('Select a disguise to be automatically applied when Undetectable mode is on.')}
                                                 </span>
@@ -2211,7 +2219,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                 </div>
                             )}
 
-                            {activeTab === 'ai-providers' && (
+                            {LEGACY_PROVIDER_CONFIGURATION_ENABLED && activeTab === 'ai-providers' && (
                                 <AIProvidersSettings
                                     aiResponseLanguage={aiResponseLanguage}
                                     availableAiLanguages={availableAiLanguages}
@@ -2232,7 +2240,7 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                     <div className="flex items-start justify-between">
                                         <div>
                                             <h3 className="text-lg font-bold text-text-primary mb-1">{t('Keyboard shortcuts')}</h3>
-                                            <p className="text-xs text-text-secondary">{t('Natively works with these easy to remember commands.')}</p>
+                                            <p className="text-xs text-text-secondary">{t('Hintily works with these easy to remember commands.')}</p>
                                         </div>
                                         <button
                                             onClick={resetShortcuts}

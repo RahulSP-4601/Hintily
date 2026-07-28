@@ -48,6 +48,21 @@ Deno.serve(async (request) => {
       userId ||= String(existing?.user_id || '');
     }
     const product = productMap()[code];
+    const subscriptionLifecycle =
+      /^(subscription\.(active|renewed))$/.test(eventType);
+    const rawReceivedAmount = subscriptionLifecycle
+      ? value(data, 'recurring_pre_tax_amount', 'recurring_amount')
+      : value(data, 'total_amount', 'amount');
+    const receivedAmount = rawReceivedAmount == null ? Number.NaN : Number(rawReceivedAmount);
+    const receivedCurrency = String(value(data, 'currency') || '').toUpperCase();
+    const grantsAccess = /^(payment\.(succeeded|success)|subscription\.(active|renewed))$/.test(eventType);
+    if (grantsAccess && product && (
+      !Number.isSafeInteger(receivedAmount)
+      || receivedAmount !== product.amountMinor
+      || receivedCurrency !== 'INR'
+    )) {
+      return json(400, { error: 'payment_amount_mismatch' });
+    }
     let endsAt = value(data, 'next_billing_date', 'expires_at');
     if (product?.unlimited && product.interval !== 'lifetime' && typeof endsAt !== 'string') {
       const fallbackDays = product.interval === 'year' ? 370 : product.interval === 'quarter' ? 100 : 35;
@@ -67,9 +82,8 @@ Deno.serve(async (request) => {
       session_count: product?.sessions || 0,
       unlimited_plan: product?.unlimited || false,
       entitlement_ends_at: typeof endsAt === 'string' ? endsAt : null,
-      amount_minor: Number.isSafeInteger(Number(value(data, 'total_amount', 'amount')))
-        ? Number(value(data, 'total_amount', 'amount')) : null,
-      currency_code: String(value(data, 'currency') || '').slice(0, 3),
+      amount_minor: Number.isSafeInteger(receivedAmount) ? receivedAmount : null,
+      currency_code: receivedCurrency.slice(0, 3),
       safe_metadata: { dodo_event_type: eventType, dodo_subscription_id: subscriptionId || null },
     });
     if (error) return json(500, { error: 'webhook_processing_failed' });

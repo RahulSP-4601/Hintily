@@ -24,7 +24,9 @@ Deno.serve(async (request) => {
   const authorization = request.headers.get('authorization');
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
-  const deepgramKey = Deno.env.get('DEEPGRAM_API_KEY');
+  const deepgramKey = Deno.env.get('HINTILY_MANAGED_DEEPGRAM_API_KEY')
+    || Deno.env.get('HINTLY_MANAGED_DEEPGRAM_API_KEY')
+    || Deno.env.get('DEEPGRAM_API_KEY');
   if (!authorization?.startsWith('Bearer ') || !supabaseUrl || !anonKey || !deepgramKey) {
     return reject(401, 'unauthorized');
   }

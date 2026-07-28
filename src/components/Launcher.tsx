@@ -752,7 +752,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                     {/* 1.5. Hero Header (Title + Controls + CTA) */}
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-4">
-                                            <h1 className="text-3xl font-celeb-light font-medium text-text-primary tracking-wide drop-shadow-sm">{t('My Natively')}</h1>
+                                            <h1 className="text-3xl font-celeb-light font-medium text-text-primary tracking-wide drop-shadow-sm">{t('My Hintily')}</h1>
 
                                             {/* Refresh Button */}
                                             <button
@@ -861,7 +861,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                             onClick={() => {
                                                 if (isMeetingActive) {
                                                     // inactive=true: overlay appears on top but doesn't activate
-                                                    // the Natively app or steal OS focus — preserves stealth.
+                                                    // the Hintily app or steal OS focus — preserves stealth.
                                                     // setWindowMode (not showWindow) is required because
                                                     // logo-click set currentWindowMode='launcher', so showWindow()
                                                     // would re-show the launcher rather than switch to overlay.
@@ -936,7 +936,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                 src={icon} alt="Logo" className="w-[18px] h-[18px] object-contain brightness-0 invert drop-shadow-[0_1px_2px_rgba(0,0,0,0.1)] opacity-90"
                                                             />
                                                             <span className="drop-shadow-[0_1px_1px_rgba(0,0,0,0.1)] text-[20px] leading-none">
-                                                                {t('Start Natively')}
+                                                                {t('Start Hintily')}
                                                             </span>
                                                         </motion.div>
                                                     )}

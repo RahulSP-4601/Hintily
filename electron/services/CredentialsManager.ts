@@ -16,6 +16,26 @@ const CREDENTIALS_PATH = path.join(app.getPath('userData'), 'credentials.enc');
 const FALLBACK_PATH = path.join(app.getPath('userData'), 'credentials.fallback.enc');
 // Per-install random salt for the fallback key derivation (32 raw bytes, 0600).
 const SALT_PATH = path.join(app.getPath('userData'), 'credentials.salt');
+const legacyProviderConfigurationAllowed =
+    !app.isPackaged && process.env.HINTILY_ENABLE_LEGACY_BYOK_DEV === 'true';
+
+// A packaged Hintily build must never inherit a customer/provider credential
+// from the launching shell. Several legacy subsystems read process.env
+// directly, so guarding only their CredentialsManager call sites is not a
+// complete boundary.
+if (!legacyProviderConfigurationAllowed) {
+    for (const name of [
+        'GEMINI_API_KEY', 'GEMINI_API_KEY_1', 'GEMINI_API_KEY_2',
+        'GEMINI_API_KEY_3', 'GEMINI_API_KEY_4', 'GEMINI_API_KEY_5',
+        'GEMINI_API_KEY_6', 'GOOGLE_API_KEY', 'GROQ_API_KEY',
+        'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY',
+        'DEEPSEEK_API_KEY', 'LITELLM_API_KEY', 'LITELLM_BASE_URL',
+        'DEEPGRAM_API_KEY', 'ELEVENLABS_API_KEY', 'AZURE_API_KEY',
+        'IBM_WATSON_API_KEY', 'SONIOX_API_KEY',
+    ]) {
+        delete process.env[name];
+    }
+}
 
 export interface CustomProvider {
     id: string;
@@ -213,23 +233,23 @@ export class CredentialsManager {
     // =========================================================================
 
     public getGeminiApiKey(): string | undefined {
-        return this.credentials.geminiApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.geminiApiKey : undefined;
     }
 
     public getGroqApiKey(): string | undefined {
-        return this.credentials.groqApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.groqApiKey : undefined;
     }
 
     public getOpenaiApiKey(): string | undefined {
-        return this.credentials.openaiApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.openaiApiKey : undefined;
     }
 
     public getClaudeApiKey(): string | undefined {
-        return this.credentials.claudeApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.claudeApiKey : undefined;
     }
 
     public getDeepseekApiKey(): string | undefined {
-        return this.credentials.deepseekApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.deepseekApiKey : undefined;
     }
 
     /** Persisted loopback-scoped companion-extension token (stable across restarts). */
@@ -243,6 +263,7 @@ export class CredentialsManager {
      * copy so callers can't mutate the stored bundle by accident.
      */
     public getCodexOAuthTokens(): { accessToken: string; refreshToken: string; idToken?: string; expiresAt: number; email?: string; accountId?: string; lastRefreshAt?: number } | null {
+        if (!legacyProviderConfigurationAllowed) return null;
         const t = this.credentials.codexOAuthTokens;
         if (!t || typeof t.accessToken !== 'string' || typeof t.refreshToken !== 'string') return null;
         return { ...t };
@@ -261,26 +282,27 @@ export class CredentialsManager {
     }
 
     public getLitellmApiKey(): string | undefined {
-        return this.credentials.litellmApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.litellmApiKey : undefined;
     }
 
     public getLitellmBaseURL(): string | undefined {
-        return this.credentials.litellmBaseURL;
+        return legacyProviderConfigurationAllowed ? this.credentials.litellmBaseURL : undefined;
     }
 
     public getLitellmMaxTokens(): number | undefined {
-        return this.credentials.litellmMaxTokens;
+        return legacyProviderConfigurationAllowed ? this.credentials.litellmMaxTokens : undefined;
     }
 
     public getGoogleServiceAccountPath(): string | undefined {
-        return this.credentials.googleServiceAccountPath;
+        return legacyProviderConfigurationAllowed ? this.credentials.googleServiceAccountPath : undefined;
     }
 
     public getCustomProviders(): CustomProvider[] {
-        return this.credentials.customProviders || [];
+        return legacyProviderConfigurationAllowed ? this.credentials.customProviders || [] : [];
     }
 
     public getSttProvider(): 'none' | 'google' | 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox' | 'hintily' | 'natively' | 'local-whisper' {
+        if (!legacyProviderConfigurationAllowed) return 'hintily';
         const provider = this.credentials.sttProvider || 'none';
         if (provider === 'natively') {
             // Retain the encrypted legacy credential for possible migration,
@@ -294,11 +316,11 @@ export class CredentialsManager {
     }
 
     public getDeepgramApiKey(): string | undefined {
-        return this.credentials.deepgramApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.deepgramApiKey : undefined;
     }
 
     public getGroqSttApiKey(): string | undefined {
-        return this.credentials.groqSttApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.groqSttApiKey : undefined;
     }
 
     public getGroqSttModel(): string {
@@ -306,19 +328,19 @@ export class CredentialsManager {
     }
 
     public getOpenAiSttApiKey(): string | undefined {
-        return this.credentials.openAiSttApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.openAiSttApiKey : undefined;
     }
 
     public getOpenAiSttBaseUrl(): string | undefined {
-        return this.credentials.openAiSttBaseUrl;
+        return legacyProviderConfigurationAllowed ? this.credentials.openAiSttBaseUrl : undefined;
     }
 
     public getElevenLabsApiKey(): string | undefined {
-        return this.credentials.elevenLabsApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.elevenLabsApiKey : undefined;
     }
 
     public getAzureApiKey(): string | undefined {
-        return this.credentials.azureApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.azureApiKey : undefined;
     }
 
     public getAzureRegion(): string {
@@ -326,7 +348,7 @@ export class CredentialsManager {
     }
 
     public getIbmWatsonApiKey(): string | undefined {
-        return this.credentials.ibmWatsonApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.ibmWatsonApiKey : undefined;
     }
 
     public getIbmWatsonRegion(): string {
@@ -334,11 +356,11 @@ export class CredentialsManager {
     }
 
     public getSonioxApiKey(): string | undefined {
-        return this.credentials.sonioxApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.sonioxApiKey : undefined;
     }
 
     public getTavilyApiKey(): string | undefined {
-        return this.credentials.tavilyApiKey;
+        return legacyProviderConfigurationAllowed ? this.credentials.tavilyApiKey : undefined;
     }
 
     public getSttLanguage(): string {
@@ -349,6 +371,11 @@ export class CredentialsManager {
         return this.credentials.aiResponseLanguage || 'auto';
     }
     public getDefaultModel(): string {
+        // The managed Hintily AI gateway is introduced in a later phase. Until
+        // that provider exists in LLMHelper, keep a syntactically valid built-in
+        // model id here; production credential policy still prevents it from
+        // using a customer key.
+        if (!legacyProviderConfigurationAllowed) return 'gemini-3.1-flash-lite';
         // Default to Flash-Lite: ~0.65s first-token vs ~2.3s for full Flash on
         // the same prompt (measured), and faster output streaming — the
         // Cluely-class interactive latency target. Full Flash / Pro remain
@@ -364,7 +391,13 @@ export class CredentialsManager {
     }
 
     public getAllCredentials(): StoredCredentials {
-        return { ...this.credentials };
+        if (legacyProviderConfigurationAllowed) return { ...this.credentials };
+        return {
+            phoneMirrorToken: this.credentials.phoneMirrorToken,
+            sttProvider: 'hintily',
+            sttLanguage: this.credentials.sttLanguage,
+            aiResponseLanguage: this.credentials.aiResponseLanguage,
+        };
     }
 
     // =========================================================================
@@ -376,6 +409,7 @@ export class CredentialsManager {
      * Used by ScreenUnderstandingService to gate vision_only / decide fallback.
      */
     public anyVisionProviderConfigured(): boolean {
+        if (!legacyProviderConfigurationAllowed) return false;
         if (this.credentials.nativelyApiKey) return true;       // Natively API supports vision
         if (this.credentials.openaiApiKey) return true;          // gpt-4o / gpt-5 vision
         if (this.credentials.claudeApiKey) return true;          // Claude vision
@@ -393,6 +427,7 @@ export class CredentialsManager {
      * Used by private_vision mode to enforce no cloud-vision calls.
      */
     public anyLocalVisionProviderConfigured(): boolean {
+        if (!legacyProviderConfigurationAllowed) return false;
         // Ollama: caller verifies the configured model is vision-capable via modelCapabilities.
         // Here we only assert the runtime is configured — model gating happens in the chain.
         const ollamaBaseUrl = (this.credentials as any).ollamaBaseUrl as string | undefined;
@@ -612,6 +647,7 @@ export class CredentialsManager {
      * caused by exactly that pattern. This getter is test-time only.
      */
     public getStoredSttKeyForProvider(provider: 'groq' | 'openai' | 'deepgram' | 'elevenlabs' | 'azure' | 'ibmwatson' | 'soniox'): string | undefined {
+        if (!legacyProviderConfigurationAllowed) return undefined;
         switch (provider) {
             case 'groq':       return this.credentials.groqSttApiKey;
             case 'openai':     return this.credentials.openAiSttApiKey;
@@ -709,7 +745,7 @@ export class CredentialsManager {
     }
 
     public getCurlProviders(): CurlProvider[] {
-        return this.credentials.curlProviders || [];
+        return legacyProviderConfigurationAllowed ? this.credentials.curlProviders || [] : [];
     }
 
     public saveCurlProvider(provider: CurlProvider): void {

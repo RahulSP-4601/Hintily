@@ -2652,7 +2652,11 @@ export class AppState {
 
   private createSTTProvider(speaker: 'interviewer' | 'user'): STTProvider | null {
     const { CredentialsManager } = require('./services/CredentialsManager');
-    const sttProvider = CredentialsManager.getInstance().getSttProvider();
+    const legacyProviderConfigurationAllowed =
+      !app.isPackaged && process.env.HINTILY_ENABLE_LEGACY_BYOK_DEV === 'true';
+    const sttProvider = legacyProviderConfigurationAllowed
+      ? CredentialsManager.getInstance().getSttProvider()
+      : 'hintily';
     const sttLanguage = CredentialsManager.getInstance().getSttLanguage();
 
     // 'none' means the user has explicitly disabled STT (no provider selected).
@@ -2673,12 +2677,12 @@ export class AppState {
       const connectManagedChannel = () => {
         if (managedChannelConnected) return;
         managedChannelConnected = true;
-        managed.channelConnected();
+        managed.channelConnected(speaker);
       };
       const disconnectManagedChannel = () => {
         if (!managedChannelConnected) return;
         managedChannelConnected = false;
-        managed.channelDisconnected();
+        managed.channelDisconnected(speaker);
       };
       dg.on('connected', connectManagedChannel);
       dg.on('usage', usage => managed.serverUsage(usage));
@@ -2696,7 +2700,18 @@ export class AppState {
         this.broadcast('hintily-managed-stt-error', { code });
       if (speaker === 'interviewer') managed.on('session-error', reportManagedError);
       dg.on('disconnected', disconnectManagedChannel);
-      dg.on('stopped', ({ permanent }: { permanent: boolean }) => {
+      dg.on('stopped', ({
+        permanent,
+        reason,
+      }: {
+        permanent: boolean;
+        reason: 'requested' | 'reconfigure' | 'retry_exhausted';
+      }) => {
+        // Explicit meeting shutdown, auth changes, provider reconfiguration,
+        // and sleep/wake recreation all stop the socket intentionally. Only
+        // exhausted reconnects represent a managed-provider startup/runtime
+        // failure that should settle the Hintily session as failed.
+        if (reason === 'retry_exhausted') void managed.channelStartupFailed(speaker);
         disconnectManagedChannel();
         if (!permanent) return;
         managed.removeListener('exhausted', stopAtExhaustion);

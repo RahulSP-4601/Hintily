@@ -1,6 +1,6 @@
 import React from 'react';
-import { Monitor, Cpu, Info } from 'lucide-react';
-import { NativelyLogoMark } from '../NativelyLogoMark';
+import { Monitor } from 'lucide-react';
+import { LEGACY_PROVIDER_CONFIGURATION_ENABLED } from '../../config/brand';
 
 interface SidebarProps {
     activeTab: 'general' | 'natively-api' | 'ai-providers' | 'about';
@@ -20,18 +20,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, onClo
                     >
                         <Monitor size={16} /> General
                     </button>
-                    <button
-                        onClick={() => setActiveTab('natively-api')}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'natively-api' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
-                    >
-                        <NativelyLogoMark size={16} className="text-blue-500" /> Hintily AI
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('ai-providers')}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'ai-providers' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
-                    >
-                        <Cpu size={16} /> AI Providers
-                    </button>
+                    {LEGACY_PROVIDER_CONFIGURATION_ENABLED && (
+                        <button
+                            onClick={() => setActiveTab('ai-providers')}
+                            className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 ${activeTab === 'ai-providers' ? 'bg-bg-item-active text-text-primary' : 'text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50'}`}
+                        >
+                            Developer providers
+                        </button>
+                    )}
                     {/* Add more tabs as needed */}
                 </nav>
             </div>

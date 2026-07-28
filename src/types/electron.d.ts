@@ -730,9 +730,18 @@ export interface HintilyAccountState {
   unlimited: boolean
   remaining_seconds: number
   trial_remaining_seconds: number
+  free_session_available?: boolean
   paid_session_count: number
   access_revision: string | null
-  active_session: null | { id: string; client_session_id: string; status: string; consumed_seconds: number; last_heartbeat_at: string | null }
+  active_session: null | {
+    id: string
+    client_session_id: string
+    status: string
+    surface?: 'interview_helper' | 'meeting'
+    consumed_seconds: number
+    maximum_seconds?: number | null
+    last_heartbeat_at: string | null
+  }
 }
 export interface HintilySessionAuthorization {
   session_id: string

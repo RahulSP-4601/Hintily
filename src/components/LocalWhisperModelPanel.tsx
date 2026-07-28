@@ -339,7 +339,7 @@ export function LocalWhisperModelPanel() {
                     <div className="flex-1 min-w-0">
                         <div className="text-sm font-semibold text-text-primary">{t('Recovered local transcription')}</div>
                         <p className="text-xs text-text-secondary mt-1 leading-relaxed">
-                            {t('Natively recovered from a local transcription model crash. We reset')} <span className="font-mono text-text-primary">{recoveryNotice.badModelId}</span> {t('to')} <span className="font-mono text-text-primary">{recoveryNotice.fallbackModelId}</span> {t('so the app can start safely.')}
+                            {t('Hintily recovered from a local transcription model crash. We reset')} <span className="font-mono text-text-primary">{recoveryNotice.badModelId}</span> {t('to')} <span className="font-mono text-text-primary">{recoveryNotice.fallbackModelId}</span> {t('so the app can start safely.')}
                         </p>
                     </div>
                     <button

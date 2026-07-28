@@ -43,6 +43,35 @@ import { routeContext, isBackwardLookingQuery } from './intelligence/ContextRout
 import { SearchOrchestrator, type SearchCandidate } from './intelligence/SearchOrchestrator';
 import { CHAT_MODE_PROMPT } from './llm/prompts';
 import { isAssistantIdentityQuestion, profileFactsReady } from './llm/manualProfileIntelligence';
+
+const legacyProviderConfigurationAllowed = (): boolean =>
+  !app.isPackaged && process.env.HINTILY_ENABLE_LEGACY_BYOK_DEV === 'true';
+const rejectLegacyProviderConfiguration = () => ({
+  success: false,
+  error: 'provider_configuration_disabled',
+});
+const legacyBusinessLogicAllowed = (): boolean =>
+  !app.isPackaged && process.env.HINTILY_ENABLE_LEGACY_BUSINESS_DEV === 'true';
+const LEGACY_BUSINESS_CHANNELS = new Set([
+  'invalidate-natively-usage-cache',
+  'set-natively-api-key',
+  'get-natively-pricing',
+  'get-natively-usage',
+  'get-natively-key-info',
+]);
+const isLegacyBusinessChannel = (channel: string): boolean =>
+  channel.startsWith('license:')
+  || channel.startsWith('trial:')
+  || LEGACY_BUSINESS_CHANNELS.has(channel);
+const legacyBusinessDisabledResult = (channel: string): unknown => {
+  if (channel === 'license:check-premium' || channel === 'license:check-premium-async') {
+    return false;
+  }
+  if (channel === 'license:get-details') return { isPremium: false };
+  if (channel === 'license:get-hardware-id') return 'unavailable';
+  if (channel === 'trial:get-local') return { hasToken: false, trialClaimed: false };
+  return { success: false, ok: false, error: 'legacy_business_disabled' };
+};
 import { buildManualProfileEvidenceRoute } from './llm/profileAnswerBackend';
 import { DOC_GROUNDED_TOKEN_BUDGET } from './services/ModeContextRetriever';
 import { detectIncompleteNumericAnswer, completenessRegenFabricates, isDocGroundedAnswerType, isAssistantRefusal, SYSTEM_REFUSAL_RE } from './llm/documentGroundedPrompt';
@@ -178,11 +207,27 @@ export function initializeIpcHandlers(appState: AppState): void {
     listener: (event: any, ...args: any[]) => Promise<any> | any,
   ) => {
     ipcMain.removeHandler(channel);
+    if (!legacyBusinessLogicAllowed() && isLegacyBusinessChannel(channel)) {
+      ipcMain.handle(channel, () => legacyBusinessDisabledResult(channel));
+      return;
+    }
     ipcMain.handle(channel, listener);
   };
 
   const hintilyAuth = HintilyAuthService.getInstance();
   const hintilyBusiness = HintilyBusinessService.getInstance();
+  const accountScopedAbortControllers = new Set<AbortController>();
+  const accountScopedCancellers = new Set<() => void>();
+  const cancelAccountScopedWork = (): void => {
+    appState.processingHelper.cancelOngoingRequests();
+    for (const controller of accountScopedAbortControllers) {
+      try { controller.abort(); } catch { /* best effort */ }
+    }
+    accountScopedAbortControllers.clear();
+    for (const cancel of accountScopedCancellers) {
+      try { cancel(); } catch { /* best effort */ }
+    }
+  };
   const hintilyUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   // Account operations must wait for keychain restoration to settle. Without
   // this barrier, a fast sign-out can delete the stored session while
@@ -194,8 +239,23 @@ export function initializeIpcHandlers(appState: AppState): void {
     const owner = hintilyAuth.getStatus()?.user?.id || 'local_default';
     appState.getKnowledgeOrchestrator()?.setOwnerScope?.(owner);
   };
+  let activeHintilyUserId =
+    hintilyAuth.getStatus()?.state === 'signed_in'
+      ? hintilyAuth.getStatus()?.user?.id || null
+      : null;
   hintilyAuth.on('changed', (status: any) => {
-    appState.getKnowledgeOrchestrator()?.setOwnerScope?.(status?.user?.id || 'local_default');
+    const nextUserId = status?.state === 'signed_in' ? status?.user?.id || null : null;
+    const accountChanged = activeHintilyUserId !== null && activeHintilyUserId !== nextUserId;
+    if (status?.state !== 'signed_in' || accountChanged) {
+      cancelAccountScopedWork();
+    }
+    if (accountChanged) {
+      const reason = nextUserId ? 'account_switched' : 'authentication_revoked';
+      void HintilyManagedSession.getInstance().stopForAuthChange(reason)
+        .catch((): void => undefined);
+    }
+    activeHintilyUserId = nextUserId;
+    appState.getKnowledgeOrchestrator()?.setOwnerScope?.(nextUserId || 'local_default');
   });
   const afterHintilyAuthReady = async <T>(operation: () => Promise<T> | T): Promise<T> => {
     await hintilyAuthReady;
@@ -209,12 +269,14 @@ export function initializeIpcHandlers(appState: AppState): void {
     afterHintilyAuthReady(() => hintilyAuth.refresh()));
   safeHandle('hintily-auth:sign-out', () =>
     afterHintilyAuthReady(async () => {
+      cancelAccountScopedWork();
       await HintilyManagedSession.getInstance().stopForAuthChange('signed_out')
         .catch((): void => undefined);
       return hintilyAuth.signOut();
     }));
   safeHandle('hintily-auth:delete-account', () =>
     afterHintilyAuthReady(async () => {
+      cancelAccountScopedWork();
       await HintilyManagedSession.getInstance().stopForAuthChange('account_deleted')
         .catch((): void => undefined);
       return hintilyAuth.deleteAccount();
@@ -390,30 +452,19 @@ export function initializeIpcHandlers(appState: AppState): void {
   };
 
   /**
-   * Returns true if the user has an active premium license OR an unexpired free trial.
-   * Used to gate profile intelligence features (resume upload, JD upload, company research, etc.).
+   * Profile intelligence follows Hintily account access, not the inherited
+   * device license. The backend remains authoritative so a renderer cannot
+   * unlock these operations by changing local state.
    */
-  const isProOrTrialActive = (): boolean => {
-    // 1. Full premium license (Dodo / Gumroad / Natively API subscription)
-    try {
-      const { LicenseManager } = require('../premium/electron/services/LicenseManager');
-      if (LicenseManager.getInstance().isPremium()) return true;
-    } catch {
-      /* premium module not available */
-    }
-
-    // 2. Active free trial (token present and not expired)
-    try {
-      const { CredentialsManager } = require('./services/CredentialsManager');
-      const cm = CredentialsManager.getInstance();
-      const token = cm.getTrialToken();
-      if (!token) return false;
-      const expiresAt = cm.getTrialExpiresAt();
-      if (!expiresAt) return false;
-      return new Date(expiresAt).getTime() > Date.now();
-    } catch {
-      return false;
-    }
+  const hasHintilyFeatureAccess = async (): Promise<boolean> => {
+    await hintilyAuthReady;
+    if (hintilyAuth.getStatus()?.state !== 'signed_in') return false;
+    const state = await hintilyBusiness.getAccountState();
+    if (!state.ok) return false;
+    return state.data.unlimited
+      || state.data.free_session_available === true
+      || state.data.paid_session_count > 0
+      || state.data.active_session !== null;
   };
 
   // Clears premium-only context when the pro license is lost.
@@ -894,6 +945,13 @@ export function initializeIpcHandlers(appState: AppState): void {
   let _chatStreamId = 0;
   // Keep IDs globally unique for phone/desktop message correlation; supersession is per sender.
   const _chatStreamsBySender = new Map<number, { streamId: number; controller: AbortController }>();
+  accountScopedCancellers.add(() => {
+    for (const stream of _chatStreamsBySender.values()) {
+      try { stream.controller.abort(); } catch { /* best effort */ }
+    }
+    _chatStreamsBySender.clear();
+    _chatStreamId++;
+  });
   // Phone-mirror chat supersession is tracked SEPARATELY from the global id counter.
   // `_chatStreamId` is shared with the desktop chat path purely to keep correlation ids
   // globally unique, so checking it for phone supersession let a desktop message (which
@@ -961,6 +1019,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           try { priorStream.controller.abort(); } catch { /* noop */ }
         }
         myController = new AbortController();
+        accountScopedAbortControllers.add(myController);
         _chatStreamsBySender.set(senderId, { streamId: myStreamId, controller: myController });
 
         // Reap this sender's conversation memory when the renderer goes away, so the
@@ -4432,6 +4491,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       } finally {
         if (_manualFgToken) ForegroundGate.end(_manualFgToken);
         if (myController) {
+          accountScopedAbortControllers.delete(myController);
           const current = _chatStreamsBySender.get(event.sender.id);
           if (current?.controller === myController) {
             _chatStreamsBySender.delete(event.sender.id);
@@ -5250,6 +5310,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   // Dedicated API key setters (for Settings UI Save buttons)
   safeHandle('set-gemini-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
@@ -5309,6 +5370,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('set-groq-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
@@ -5339,6 +5401,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('set-openai-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
@@ -5387,6 +5450,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('set-claude-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
@@ -5417,6 +5481,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('set-deepseek-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
@@ -5447,6 +5512,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('set-litellm-config', async (_, config: { apiKey: string; baseURL: string; maxTokens?: number }) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
@@ -5524,6 +5590,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   const PRICING_CACHE_TTL_MS = 5 * 60_000;
 
   safeHandle('set-natively-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const cm = CredentialsManager.getInstance();
@@ -6180,6 +6247,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   };
 
   safeHandle('save-custom-provider', async (_, provider: unknown) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const validation = validateCurlProviderPayload(provider);
       if (!validation.ok) {
@@ -6252,6 +6320,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('save-curl-provider', async (_, provider: unknown) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const validation = validateCurlProviderPayload(provider);
       if (!validation.ok) {
@@ -6467,7 +6536,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       const needsManagedAuthorization =
         provider === 'hintily' &&
         appState.getIsMeetingActive() &&
-        !managedSession.activeSessionId;
+        !managedSession.authorizedSessionId;
       let managedSessionAuthorized = false;
       let providerChanged = false;
       try {
@@ -6556,6 +6625,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   };
 
   safeHandle('set-groq-stt-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const persisted = CredentialsManager.getInstance().setGroqSttApiKey(apiKey);
@@ -6570,6 +6640,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('set-openai-stt-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const persisted = CredentialsManager.getInstance().setOpenAiSttApiKey(apiKey);
@@ -6610,6 +6681,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('set-deepgram-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const persisted = CredentialsManager.getInstance().setDeepgramApiKey(apiKey);
@@ -6640,6 +6712,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('set-elevenlabs-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const persisted = CredentialsManager.getInstance().setElevenLabsApiKey(apiKey);
@@ -6655,6 +6728,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('set-azure-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const persisted = CredentialsManager.getInstance().setAzureApiKey(apiKey);
@@ -6694,6 +6768,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('set-ibmwatson-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const persisted = CredentialsManager.getInstance().setIbmWatsonApiKey(apiKey);
@@ -6709,6 +6784,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('set-soniox-api-key', async (_, apiKey: string) => {
+    if (!legacyProviderConfigurationAllowed()) return rejectLegacyProviderConfiguration();
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
       const persisted = CredentialsManager.getInstance().setSonioxApiKey(apiKey);
@@ -7668,6 +7744,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   // --- Model Selector Window IPC ---
 
   safeHandle('show-model-selector', (_, coords: { x: number; y: number; activate?: boolean }) => {
+    if (!legacyProviderConfigurationAllowed()) return;
     appState.modelSelectorWindowHelper.showWindow(coords.x, coords.y, { activate: coords.activate });
   });
 
@@ -7676,6 +7753,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
 
   safeHandle('toggle-model-selector', (_, coords: { x: number; y: number; activate?: boolean }) => {
+    if (!legacyProviderConfigurationAllowed()) return;
     appState.modelSelectorWindowHelper.toggleWindow(coords.x, coords.y, { activate: coords.activate });
   });
 
@@ -8917,6 +8995,12 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   // Store active query abort controllers for cancellation
   const activeRAGQueries = new Map<string, AbortController>();
+  accountScopedCancellers.add(() => {
+    for (const controller of activeRAGQueries.values()) {
+      try { controller.abort(); } catch { /* best effort */ }
+    }
+    activeRAGQueries.clear();
+  });
 
   // Query meeting with RAG (meeting-scoped)
   safeHandle(
@@ -8943,6 +9027,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       }
 
       const abortController = new AbortController();
+      accountScopedAbortControllers.add(abortController);
       const queryKey = `meeting-${meetingId}-${crypto.randomUUID()}`;
       activeRAGQueries.set(queryKey, abortController);
 
@@ -8954,6 +9039,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           event.sender.send('rag:stream-chunk', { meetingId, chunk });
         }
 
+        if (abortController.signal.aborted) return { success: false, cancelled: true };
         event.sender.send('rag:stream-complete', { meetingId });
         return { success: true };
       } catch (error: any) {
@@ -8970,6 +9056,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         }
         return { success: false, error: error.message };
       } finally {
+        accountScopedAbortControllers.delete(abortController);
         activeRAGQueries.delete(queryKey);
       }
     },
@@ -8993,6 +9080,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
 
     const abortController = new AbortController();
+    accountScopedAbortControllers.add(abortController);
     // Date.now() alone collides when two queries fire in the same ms — the
     // second `set` would overwrite the first AbortController, the first
     // stream would become un-cancellable, and the `finally` `delete` would
@@ -9011,6 +9099,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         event.sender.send('rag:stream-chunk', { live: true, chunk });
       }
 
+      if (abortController.signal.aborted) return { success: false, cancelled: true };
       event.sender.send('rag:stream-complete', { live: true });
       return { success: true };
     } catch (error: any) {
@@ -9026,6 +9115,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       }
       return { success: false, error: error.message };
     } finally {
+      accountScopedAbortControllers.delete(abortController);
       activeRAGQueries.delete(queryKey);
     }
   });
@@ -9039,6 +9129,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
 
     const abortController = new AbortController();
+    accountScopedAbortControllers.add(abortController);
     // See live-${...} comment above for why Date.now() alone is unsafe.
     const queryKey = `global-${crypto.randomUUID()}`;
     activeRAGQueries.set(queryKey, abortController);
@@ -9051,6 +9142,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         event.sender.send('rag:stream-chunk', { global: true, chunk });
       }
 
+      if (abortController.signal.aborted) return { success: false, cancelled: true };
       event.sender.send('rag:stream-complete', { global: true });
       return { success: true };
     } catch (error: any) {
@@ -9059,6 +9151,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       }
       return { success: false, error: error.message };
     } finally {
+      accountScopedAbortControllers.delete(abortController);
       activeRAGQueries.delete(queryKey);
     }
   });
@@ -9162,11 +9255,11 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('profile:upload-resume', async (_, filePath: string) => {
     try {
       // Premium gate: require active license or free trial for profile features
-      if (!isProOrTrialActive()) {
+      if (!await hasHintilyFeatureAccess()) {
         return {
           success: false,
           error:
-            'Pro license required. Please activate a license key to use Profile Intelligence features.',
+            'An available Hintily session or unlimited plan is required to use Profile Intelligence.',
         };
       }
       await syncProfileOwner();
@@ -9310,11 +9403,11 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('profile:set-mode', async (_, enabled: boolean) => {
     try {
       // Premium gate: only allow enabling profile mode with active license or free trial
-      if (enabled && !isProOrTrialActive()) {
+      if (enabled && !await hasHintilyFeatureAccess()) {
         return {
           success: false,
           error:
-            'Pro license required. Please activate a license key to use Profile Intelligence features.',
+            'An available Hintily session or unlimited plan is required to use Profile Intelligence.',
         };
       }
       const orchestrator = appState.getKnowledgeOrchestrator();
@@ -9366,7 +9459,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   }) => {
     try {
       await syncProfileOwner();
-      if (!isProOrTrialActive()) return { success: false, error: 'Pro license required.' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'An available Hintily session or unlimited plan is required.' };
       const orchestrator = appState.getKnowledgeOrchestrator();
       if (!orchestrator) return { success: false, error: 'Knowledge engine not initialized' };
       if (!payload || (payload.docType !== 'resume' && payload.docType !== 'jd')) {
@@ -9456,11 +9549,11 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('profile:upload-jd', async (_, filePath: string) => {
     try {
       // Premium gate
-      if (!isProOrTrialActive()) {
+      if (!await hasHintilyFeatureAccess()) {
         return {
           success: false,
           error:
-            'Pro license required. Please activate a license key to use Profile Intelligence features.',
+            'An available Hintily session or unlimited plan is required to use Profile Intelligence.',
         };
       }
       await syncProfileOwner();
@@ -9527,7 +9620,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('knowledge:export-profile-pack', async () => {
     try {
       await syncProfileOwner();
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { isOkfProfileMarkdownExportEnabled } = require('./intelligence/intelligenceFlags') as typeof import('./intelligence/intelligenceFlags');
       if (!isOkfProfileMarkdownExportEnabled()) return { success: false, error: 'export_flag_off' };
 
@@ -9577,7 +9670,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('knowledge:list-profile-packs', async () => {
     try {
       await syncProfileOwner();
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required', packs: [] };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required', packs: [] };
       const { isOkfProfileKnowledgeUiEnabled } = require('./intelligence/intelligenceFlags') as typeof import('./intelligence/intelligenceFlags');
       if (!isOkfProfileKnowledgeUiEnabled()) return { success: false, error: 'ui_flag_off', packs: [] };
       const { ProfilePackBuilder } = require('./services/knowledge/ProfilePackBuilder') as typeof import('./services/knowledge/ProfilePackBuilder');
@@ -9596,7 +9689,7 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('knowledge:get-profile-pack', async (_, kind: string) => {
     try {
       await syncProfileOwner();
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { isOkfProfileKnowledgeUiEnabled } = require('./intelligence/intelligenceFlags') as typeof import('./intelligence/intelligenceFlags');
       if (!isOkfProfileKnowledgeUiEnabled()) return { success: false, error: 'ui_flag_off' };
       const { ProfilePackBuilder } = require('./services/knowledge/ProfilePackBuilder') as typeof import('./services/knowledge/ProfilePackBuilder');
@@ -9625,11 +9718,11 @@ export function initializeIpcHandlers(appState: AppState): void {
       await syncProfileOwner();
       console.log(`[CompanyIntel-research] invoked for companyName="${companyName}"`);
       // Premium gate
-      if (!isProOrTrialActive()) {
+      if (!await hasHintilyFeatureAccess()) {
         return {
           success: false,
           error:
-            'Pro license required. Please activate a license key to use Profile Intelligence features.',
+            'An available Hintily session or unlimited plan is required to use Profile Intelligence.',
         };
       }
       const orchestrator = appState.getKnowledgeOrchestrator();
@@ -9681,11 +9774,11 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       await syncProfileOwner();
       // Premium gate
-      if (!isProOrTrialActive()) {
+      if (!await hasHintilyFeatureAccess()) {
         return {
           success: false,
           error:
-            'Pro license required. Please activate a license key to use Profile Intelligence features.',
+            'An available Hintily session or unlimited plan is required to use Profile Intelligence.',
         };
       }
       const orchestrator = appState.getKnowledgeOrchestrator();
@@ -9720,11 +9813,11 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       await syncProfileOwner();
       // Premium gate
-      if (!isProOrTrialActive()) {
+      if (!await hasHintilyFeatureAccess()) {
         return {
           success: false,
           error:
-            'Pro license required. Please activate a license key to use Profile Intelligence features.',
+            'An available Hintily session or unlimited plan is required to use Profile Intelligence.',
         };
       }
       const orchestrator = appState.getKnowledgeOrchestrator();
@@ -9904,7 +9997,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('modes:create', async (_, params: { name: string; templateType: string }) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { ModesManager } = require('./services/ModesManager');
       const mode = ModesManager.getInstance().createMode({
         name: params.name,
@@ -9936,7 +10029,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       },
     ) => {
       try {
-        if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+        if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
         if (!params?.brief || typeof params.brief !== 'string' || params.brief.trim().length < 8) {
           return { success: false, error: 'brief_too_short' };
         }
@@ -9997,13 +10090,13 @@ export function initializeIpcHandlers(appState: AppState): void {
         const mgr = ModesManager.getInstance();
         // Gate: changing templateType to a non-general template requires pro.
         // Also gate if the existing mode is already non-general (editing a pro mode requires pro).
-        if (!isProOrTrialActive()) {
+        if (!await hasHintilyFeatureAccess()) {
           if (updates.templateType && updates.templateType !== 'general') {
-            return { success: false, error: 'pro_required' };
+            return { success: false, error: 'hintily_access_required' };
           }
           const existing = mgr.getModes().find((m: any) => m.id === id);
           if (existing && existing.templateType !== 'general') {
-            return { success: false, error: 'pro_required' };
+            return { success: false, error: 'hintily_access_required' };
           }
         }
         mgr.updateMode(id, updates);
@@ -10053,7 +10146,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       // but the IPC must enforce the same gate so a hand-crafted payload
       // can't bypass. Mirror modes:set-active: general modes are free, all
       // others require pro/trial.
-      if (input.templateType !== 'general' && !isProOrTrialActive()) {
+      if (input.templateType !== 'general' && !await hasHintilyFeatureAccess()) {
         return null;
       }
       const { ModesManager } = require('./services/ModesManager');
@@ -10077,7 +10170,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('modes:delete', async (_, id: string) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { ModesManager } = require('./services/ModesManager');
       ModesManager.getInstance().deleteMode(id);
       return { success: true };
@@ -10095,8 +10188,8 @@ export function initializeIpcHandlers(appState: AppState): void {
         const targetMode = ModesManager.getInstance()
           .getModes()
           .find((m: any) => m.id === id);
-        if (targetMode && targetMode.templateType !== 'general' && !isProOrTrialActive()) {
-          return { success: false, error: 'pro_required' };
+        if (targetMode && targetMode.templateType !== 'general' && !await hasHintilyFeatureAccess()) {
+          return { success: false, error: 'hintily_access_required' };
         }
       }
       const { ModesManager } = require('./services/ModesManager');
@@ -10193,7 +10286,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('modes:upload-reference-file', async (_, modeId: string) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const result: any = await dialog.showOpenDialog({
         properties: ['openFile'],
         filters: [
@@ -10225,7 +10318,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('modes:delete-reference-file', async (_, id: string) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { ModesManager } = require('./services/ModesManager');
       ModesManager.getInstance().deleteReferenceFile(id);
       return { success: true };
@@ -10296,7 +10389,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('knowledge:regenerate-pack', async (_, params: { fileId: string; modeId: string; fileName: string }) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { isOkfKnowledgeUiEnabled } = require('./intelligence/intelligenceFlags');
       if (!isOkfKnowledgeUiEnabled()) return { success: false, error: 'okf_knowledge_ui_disabled' };
       const { ModesManager } = require('./services/ModesManager');
@@ -10322,7 +10415,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('knowledge:export-pack', async (_, fileId: string) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { isOkfMarkdownExportEnabled } = require('./intelligence/intelligenceFlags');
       if (!isOkfMarkdownExportEnabled()) return { success: false, error: 'okf_markdown_export_disabled' };
       const { KnowledgeManager } = require('./services/knowledge/KnowledgeManager');
@@ -10360,7 +10453,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('knowledge:edit-card', async (_, params: { cardId: string; title?: string; body?: string; entities?: string[]; tags?: string[] }) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { isOkfUserEditableCardsEnabled } = require('./intelligence/intelligenceFlags');
       if (!isOkfUserEditableCardsEnabled()) return { success: false, error: 'okf_user_editable_cards_disabled' };
       const { editCard } = require('./services/knowledge/OkfCardEditor');
@@ -10374,7 +10467,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('knowledge:approve-card', async (_, cardId: string) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { isOkfUserEditableCardsEnabled } = require('./intelligence/intelligenceFlags');
       if (!isOkfUserEditableCardsEnabled()) return { success: false, error: 'okf_user_editable_cards_disabled' };
       const { approveCard } = require('./services/knowledge/OkfCardEditor');
@@ -10388,7 +10481,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('knowledge:reject-card', async (_, cardId: string) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { isOkfUserEditableCardsEnabled } = require('./intelligence/intelligenceFlags');
       if (!isOkfUserEditableCardsEnabled()) return { success: false, error: 'okf_user_editable_cards_disabled' };
       const { rejectCard } = require('./services/knowledge/OkfCardEditor');
@@ -10402,7 +10495,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('knowledge:restore-card-version', async (_, params: { cardId: string; versionId: string }) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { isOkfUserEditableCardsEnabled } = require('./intelligence/intelligenceFlags');
       if (!isOkfUserEditableCardsEnabled()) return { success: false, error: 'okf_user_editable_cards_disabled' };
       const { restoreCardVersion } = require('./services/knowledge/OkfCardEditor');
@@ -10442,7 +10535,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     'modes:add-note-section',
     async (_, modeId: string, title: string, description: string) => {
       try {
-        if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+        if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
         const { ModesManager } = require('./services/ModesManager');
         const section = ModesManager.getInstance().addNoteSection({ modeId, title, description });
         return { success: true, section };
@@ -10457,7 +10550,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     'modes:update-note-section',
     async (_, id: string, updates: { title?: string; description?: string }) => {
       try {
-        if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+        if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
         const { ModesManager } = require('./services/ModesManager');
         ModesManager.getInstance().updateNoteSection(id, updates);
         return { success: true };
@@ -10470,7 +10563,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('modes:delete-note-section', async (_, id: string) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { ModesManager } = require('./services/ModesManager');
       ModesManager.getInstance().deleteNoteSection(id);
       return { success: true };
@@ -10482,7 +10575,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('modes:remove-all-note-sections', async (_, modeId: string) => {
     try {
-      if (!isProOrTrialActive()) return { success: false, error: 'pro_required' };
+      if (!await hasHintilyFeatureAccess()) return { success: false, error: 'hintily_access_required' };
       const { ModesManager } = require('./services/ModesManager');
       ModesManager.getInstance().removeAllNoteSections(modeId);
       return { success: true };
@@ -10974,6 +11067,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         // AbortController so the live-deadline driver can cancel a stalled provider
         // request (not just stop emitting) — mirrors the desktop chat path.
         const phoneController = new AbortController();
+        accountScopedAbortControllers.add(phoneController);
         // Compute the same routing decision the desktop gemini-chat-stream uses
         // (ipcHandlers.ts ~959) so the phone-chat path applies the active custom
         // mode's voice + retrieved product material just like the desktop surface.
@@ -11083,6 +11177,7 @@ export function initializeIpcHandlers(appState: AppState): void {
             if (isIntelligenceFlagEnabled('trace')) {
               console.log('[SOURCE-GUARD] phone: blocked source=profile reason=explicit_profile_ask_in_reference_mode', { owner: _pOwn.owner });
             }
+            accountScopedAbortControllers.delete(phoneController);
             return;
           }
         } catch (pOwnErr: any) {
@@ -11115,7 +11210,10 @@ export function initializeIpcHandlers(appState: AppState): void {
             win?.webContents.send('gemini-stream-token', token, { streamId: myStreamId });
             full += token;
           },
-          onCleanup: () => { try { phoneController.abort(); } catch { /* noop */ } },
+          onCleanup: () => {
+            accountScopedAbortControllers.delete(phoneController);
+            try { phoneController.abort(); } catch { /* noop */ }
+          },
         });
         if (phoneSuperseded) return;
         if (_phoneChatLatestId === myPhoneId) {
@@ -11708,7 +11806,7 @@ export function initializeIpcHandlers(appState: AppState): void {
     });
 
     // Force pro-active state for E2E (modes:* handlers are pro-gated). Uses the
-    // real CredentialsManager trial token so the real isProOrTrialActive() passes.
+    // real CredentialsManager trial token so the real await hasHintilyFeatureAccess() passes.
     safeHandle('__e2e__:enable-pro', async () => {
       try {
         const { CredentialsManager } = require('./services/CredentialsManager');
@@ -11716,7 +11814,7 @@ export function initializeIpcHandlers(appState: AppState): void {
         const now = new Date();
         const future = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
         cm.setTrialToken('e2e-trial-token', future, now.toISOString());
-        return { success: true, pro: isProOrTrialActive() };
+        return { success: true, pro: await hasHintilyFeatureAccess() };
       } catch (e: any) {
         return { success: false, error: e.message };
       }

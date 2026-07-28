@@ -719,6 +719,14 @@ export class LLMHelper {
   }
 
   private hasNatively(): boolean {
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      const { HintilyManagedSession } = require('./services/business/HintilyManagedSession');
+      if (CredentialsManager.getInstance().getSttProvider() === 'hintily'
+          && HintilyManagedSession.getInstance().authorizedSessionId) {
+        return true;
+      }
+    } catch { /* managed services unavailable during isolated tests */ }
     // E2E: a locally-run backend with NATIVELY_LOCAL_TEST_AUTH accepts the app
     // via the x-natively-local-test header, so the natively provider is usable
     // even without a stored key. Strictly gated behind NATIVELY_E2E=1.
@@ -2885,6 +2893,17 @@ const isMultimodal = !!(imagePaths?.length);
    */
   private async generateWithNatively(userMessage: string, systemPrompt?: string, imagePaths?: string[], opts?: { purpose?: 'extraction' }): Promise<string> {
     this.assertOutboundScopes('natively', userMessage, imagePaths);
+    let useHintilyManaged = false;
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      useHintilyManaged = CredentialsManager.getInstance().getSttProvider() === 'hintily';
+    } catch { /* managed services unavailable during isolated legacy tests */ }
+    // Once Hintily is selected, never fall through to the legacy Natively
+    // key/trial route. Network, timeout, compression, and provider errors must
+    // remain managed-AI errors so BYOK cannot be resurrected accidentally.
+    if (useHintilyManaged) {
+      return this.generateWithHintilyManaged(userMessage, systemPrompt, imagePaths);
+    }
     // Prefer the in-memory field; fall back to CredentialsManager for the direct-routing path
     // where currentModelId === 'natively' but setNativelyKey() wasn't called yet.
     const e2eLocalToken =
@@ -3068,6 +3087,91 @@ const isMultimodal = !!(imagePaths?.length);
       return data.content || '';
     } finally {
       clearTimeout(overallTimer);
+    }
+  }
+
+  private async generateWithHintilyManaged(
+    userMessage: string,
+    systemPrompt?: string,
+    imagePaths?: string[],
+    abortSignal?: AbortSignal,
+  ): Promise<string> {
+    const { getHintilyConfig } = require('./config/hintily');
+    const { HintilyAuthService } = require('./services/auth/HintilyAuthService');
+    const { HintilyManagedSession } = require('./services/business/HintilyManagedSession');
+    const config = getHintilyConfig();
+    const accessToken = HintilyAuthService.getInstance().getAccessToken();
+    const managedSession = HintilyManagedSession.getInstance();
+    if (!accessToken) throw new Error('signed_out');
+    const sessionId = await managedSession.waitUntilActivated();
+    const requestController = new AbortController();
+    const unregisterRequest = managedSession.registerAiRequest(requestController);
+
+    try {
+      const images: { mime_type: string; data: string }[] = [];
+      const maxSingleImageDataChars = 1_500_000;
+      const maxImageDataChars = 4_000_000;
+      let imageDataChars = 0;
+      for (const imagePath of (imagePaths || []).slice(0, 4)) {
+        if (abortSignal?.aborted || requestController.signal.aborted) {
+          throw new Error('request_cancelled');
+        }
+        if (!fs.existsSync(imagePath)) continue;
+        let quality = 85;
+        let maxDimension = 1920;
+        let data = '';
+        while (quality >= 45) {
+          const compressed = await sharp(imagePath)
+            .resize(maxDimension, maxDimension, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality })
+            .toBuffer();
+          data = compressed.toString('base64');
+          if (data.length <= maxSingleImageDataChars) break;
+          quality -= 10;
+          maxDimension = Math.max(960, Math.floor(maxDimension * 0.85));
+        }
+        if (!data || data.length > maxSingleImageDataChars
+          || imageDataChars + data.length > maxImageDataChars) continue;
+        images.push({ mime_type: 'image/jpeg', data });
+        imageDataChars += data.length;
+      }
+      let response: Response;
+      try {
+        const signals = [AbortSignal.timeout(50_000), requestController.signal];
+        if (abortSignal) signals.push(abortSignal);
+        response = await fetch(`${config.supabaseUrl}/functions/v1/hintily-ai/chat`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            apikey: config.supabaseAnonKey,
+            'Content-Type': 'application/json',
+            'X-Client-Info': 'hintily-desktop',
+          },
+          body: JSON.stringify({
+            session_id: sessionId,
+            message: userMessage,
+            system: systemPrompt || '',
+            images,
+          }),
+          signal: AbortSignal.any(signals),
+        });
+      } catch (error) {
+        if (abortSignal?.aborted || requestController.signal.aborted) {
+          throw new Error('request_cancelled');
+        }
+        throw error;
+      }
+      const payload = await response.json().catch(() => ({})) as {
+        content?: string;
+        error?: string;
+        model?: string;
+      };
+      if (!response.ok) throw new Error(payload.error || `managed_ai_http_${response.status}`);
+      if (!payload.content?.trim()) throw new Error('managed_ai_empty_response');
+      this.lastProviderModel = payload.model || 'hintily-managed';
+      return payload.content;
+    } finally {
+      unregisterRequest();
     }
   }
 
@@ -5890,6 +5994,23 @@ const isMultimodal = !!(imagePaths?.length);
    * Throws on empty response so the fallback chain tries the next provider.
    */
   private async * streamWithNatively(userContent: string, systemPrompt?: string, imagePaths?: string[], abortSignal?: AbortSignal, connectTimeoutMs: number = INTERACTIVE_CONNECT_TIMEOUT_MS): AsyncGenerator<string, void, unknown> {
+    let useHintilyManaged = false;
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      useHintilyManaged = CredentialsManager.getInstance().getSttProvider() === 'hintily';
+    } catch { /* managed services unavailable during isolated legacy tests */ }
+    if (useHintilyManaged) {
+      if (abortSignal?.aborted) throw new Error('request_cancelled');
+      const content = await this.generateWithHintilyManaged(
+        userContent,
+        systemPrompt,
+        imagePaths,
+        abortSignal,
+      );
+      if (abortSignal?.aborted) throw new Error('request_cancelled');
+      yield content;
+      return;
+    }
     // ── REAL SSE STREAM (replaces the fake word-by-word simulation) ──────────
     // Previous implementation called generateWithNatively() (blocking, waited for
     // the full response), then drip-fed words with setTimeout delays — pure theater.

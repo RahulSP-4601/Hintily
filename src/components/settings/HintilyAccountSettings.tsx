@@ -301,30 +301,40 @@ export function HintilyAccountSettings(): React.ReactElement {
             </button>
           </div>
 
-          <div className="mt-5 rounded-lg border border-border-subtle p-4">
-            <p className="text-xs text-text-secondary">Available managed session time</p>
+          <div className="mt-5 rounded-xl border border-border-subtle bg-bg-card/40 p-4">
+            <p className="text-xs text-text-secondary">Hintily access</p>
             <p className="mt-1 text-xl font-bold text-text-primary">
               {accountLoading ? 'Loading…' : account?.unlimited
-                ? 'Unlimited'
-                : `${Math.floor((account?.remaining_seconds || 0) / 60)}m ${Math.floor((account?.remaining_seconds || 0) % 60)}s`}
+                ? 'Unlimited sessions'
+                : account?.active_session
+                  ? `${Math.floor((account.remaining_seconds || 0) / 60)}m ${Math.floor((account.remaining_seconds || 0) % 60)}s in this session`
+                  : `${account?.paid_session_count || 0} paid session${account?.paid_session_count === 1 ? '' : 's'} available`}
             </p>
-            {account && !account.unlimited && account.remaining_seconds <= 300 && account.remaining_seconds > 0 && (
+            {account?.free_session_available && !account.active_session && (
+              <p className="mt-1 text-xs text-emerald-500">Your single-use 20-minute free session is available.</p>
+            )}
+            {account?.active_session && !account.unlimited && account.remaining_seconds <= 300 && account.remaining_seconds > 0 && (
               <p className="mt-1 text-xs text-amber-500">Less than five minutes remain.</p>
             )}
-            {account && !account.unlimited && account.remaining_seconds === 0 && (
-              <p className="mt-1 text-xs text-red-400">No managed session time remains.</p>
+            {account && !account.unlimited && !account.free_session_available
+              && account.paid_session_count === 0 && !account.active_session && (
+              <p className="mt-1 text-xs text-red-400">No sessions remain. Purchase a session to continue.</p>
             )}
+            <p className="mt-2 text-[11px] leading-relaxed text-text-tertiary">
+              Each purchased session can run for up to 60 minutes. Ending early consumes that session,
+              and unused time does not carry forward.
+            </p>
             <div className="mt-3 flex flex-wrap gap-2">
               {[
-                ['session_1', 'Buy 1 session'],
-                ['session_3', 'Buy 3 sessions'],
-                ['session_7', 'Buy 7 sessions'],
-                ['session_12', 'Buy 12 sessions'],
-                ['unlimited_monthly', 'Unlimited monthly'],
-                ['unlimited_quarterly', 'Unlimited quarterly'],
-                ['unlimited_yearly', 'Unlimited yearly'],
-                ['unlimited_lifetime', 'Unlimited lifetime'],
-              ].map(([code, label]) => (
+                ['session_1', '1 session', '₹499'],
+                ['session_3', '3 sessions', '₹1,099'],
+                ['session_7', '7 sessions', '₹1,899'],
+                ['session_12', '12 sessions', '₹2,799'],
+                ['unlimited_monthly', 'Monthly unlimited', '₹3,399'],
+                ['unlimited_quarterly', 'Quarterly unlimited', '₹7,497'],
+                ['unlimited_yearly', 'Yearly unlimited', '₹25,188'],
+                ['unlimited_lifetime', 'Lifetime unlimited', '₹35,000'],
+              ].map(([code, label, price]) => (
                 <button
                   key={code}
                   disabled={busy !== null || checkoutBusy}
@@ -361,9 +371,10 @@ export function HintilyAccountSettings(): React.ReactElement {
                       setCheckoutBusy(false);
                     }
                   }}
-                  className="rounded-lg border border-border-subtle px-3 py-2 text-xs font-medium text-text-primary hover:bg-bg-subtle disabled:opacity-50"
+                  className="min-w-[138px] rounded-xl border border-border-subtle bg-bg-subtle/30 px-3 py-2.5 text-left transition-all hover:border-accent-primary/40 hover:bg-bg-subtle disabled:opacity-50"
                 >
-                  {label}
+                  <span className="block text-xs font-semibold text-text-primary">{label}</span>
+                  <span className="mt-0.5 block text-[11px] text-accent-primary">{price}</span>
                 </button>
               ))}
             </div>

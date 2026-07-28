@@ -14,12 +14,23 @@ Deno.serve(async (request) => {
     const code = String(body.product_code || '');
     const product = productMap()[code];
     if (!product) return response(400, { error: 'unknown_product' });
-    const apiKey = Deno.env.get('DODO_PAYMENTS_API_KEY');
+    // Static payment links are intentionally not returned here. Their
+    // metadata_* query parameters can be edited by the customer, so they
+    // cannot safely bind a paid grant to an authenticated Hintily account.
+    // Always create the checkout server-side with trusted metadata.
+    const apiKey = Deno.env.get('DODO_PAYMENTS_API_KEY') || Deno.env.get('DODO_API_KEY');
     const mode = Deno.env.get('DODO_PAYMENTS_ENVIRONMENT') || 'test_mode';
-    const returnUrl = Deno.env.get('HINTILY_CHECKOUT_RETURN_URL');
-    const cancelUrl = Deno.env.get('HINTILY_CHECKOUT_CANCEL_URL');
+    const returnUrl = Deno.env.get('HINTILY_CHECKOUT_RETURN_URL')
+      || Deno.env.get('HINTLY_SUCCESS_URL');
+    const cancelUrl = Deno.env.get('HINTILY_CHECKOUT_CANCEL_URL')
+      || Deno.env.get('HINTLY_CANCEL_URL');
     if (!apiKey || !returnUrl) return response(503, { error: 'checkout_unconfigured' });
-    const endpoint = mode === 'live_mode' ? 'https://live.dodopayments.com/checkouts' : 'https://test.dodopayments.com/checkouts';
+    const configuredBase = Deno.env.get('DODO_API_BASE_URL')?.replace(/\/+$/, '');
+    const endpoint = configuredBase
+      ? configuredBase.endsWith('/checkouts') ? configuredBase : `${configuredBase}/checkouts`
+      : mode === 'live_mode'
+        ? 'https://live.dodopayments.com/checkouts'
+        : 'https://test.dodopayments.com/checkouts';
     const dodo = await fetch(endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },

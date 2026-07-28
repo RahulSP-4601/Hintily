@@ -96,6 +96,12 @@ export class HintilyBusinessService {
       'hintily-business', 'activate', 'POST', { session_id: sessionId },
     );
   }
+  checkManagedAiReady(sessionId: string) {
+    return this.request<{ ready: boolean }>(
+      'hintily-ai', 'ready', 'POST', { session_id: sessionId },
+      { retry: false },
+    );
+  }
   heartbeat(sessionId: string, sequenceNo: number, activeSeconds: number) {
     return this.request<HintilyHeartbeatResult>('hintily-business', 'heartbeat', 'POST', {
       session_id: sessionId, sequence_no: sequenceNo, active_seconds: activeSeconds,

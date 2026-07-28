@@ -3,24 +3,68 @@ export interface DodoProduct {
   sessions: number;
   unlimited: boolean;
   interval?: 'month' | 'quarter' | 'year' | 'lifetime';
+  amountMinor: number;
+  checkoutUrl?: string;
 }
 
+const PRODUCT_SPECS: Record<string, Omit<DodoProduct, 'productId' | 'checkoutUrl'>> = {
+  session_1: { sessions: 1, unlimited: false, amountMinor: 49_900 },
+  session_3: { sessions: 3, unlimited: false, amountMinor: 109_900 },
+  session_7: { sessions: 7, unlimited: false, amountMinor: 189_900 },
+  session_12: { sessions: 12, unlimited: false, amountMinor: 279_900 },
+  unlimited_monthly: { sessions: 0, unlimited: true, interval: 'month', amountMinor: 339_900 },
+  unlimited_quarterly: { sessions: 0, unlimited: true, interval: 'quarter', amountMinor: 749_700 },
+  unlimited_yearly: { sessions: 0, unlimited: true, interval: 'year', amountMinor: 2_518_800 },
+  unlimited_lifetime: { sessions: 0, unlimited: true, interval: 'lifetime', amountMinor: 3_500_000 },
+};
+
+const legacyPrefix = (code: string) => code
+  .replace(/^session_/, 'SESSION_PACK_')
+  .replace(/^unlimited_/, 'UNLIMITED_')
+  .toUpperCase();
+
 export const productMap = (): Record<string, DodoProduct> => {
-  const raw = Deno.env.get('DODO_PRODUCT_MAP');
-  if (!raw) throw new Error('dodo_product_map_missing');
-  const parsed = JSON.parse(raw);
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('dodo_product_map_invalid');
-  const output: Record<string, DodoProduct> = {};
-  for (const [code, value] of Object.entries(parsed as Record<string, unknown>)) {
-    if (!/^[a-z0-9_-]{2,60}$/.test(code) || !value || typeof value !== 'object') continue;
-    const item = value as Record<string, unknown>;
-    const productId = String(item.productId || '');
-    const sessions = Number(item.sessions || 0);
-    const unlimited = item.unlimited === true;
-    if (!productId || !Number.isInteger(sessions) || sessions < 0 || sessions > 100 ||
-        (!unlimited && sessions === 0)) continue;
-    output[code] = { productId, sessions, unlimited, interval: item.interval as DodoProduct['interval'] };
+  const raw = Deno.env.get('DODO_PRODUCT_MAP')
+    || Deno.env.get('HINTILY_DODO_PRODUCTS_JSON')
+    || Deno.env.get('HINTLY_DODO_PRODUCTS_JSON');
+  let parsed: Record<string, unknown> = {};
+  if (raw) {
+    const candidate = JSON.parse(raw);
+    if (!candidate || Array.isArray(candidate) || typeof candidate !== 'object') {
+      throw new Error('dodo_product_map_invalid');
+    }
+    parsed = candidate as Record<string, unknown>;
   }
+  const output: Record<string, DodoProduct> = {};
+  for (const [code, spec] of Object.entries(PRODUCT_SPECS)) {
+    const configured = parsed[code];
+    const item = configured && typeof configured === 'object'
+      ? configured as Record<string, unknown>
+      : {};
+    const prefix = legacyPrefix(code);
+    const productId = String(
+      item.productId
+      || Deno.env.get(`HINTILY_${prefix}_DODO_PRODUCT_ID`)
+      || Deno.env.get(`HINTLY_${prefix}_DODO_PRODUCT_ID`)
+      || '',
+    ).trim();
+    const checkoutUrl = String(
+      item.checkoutUrl
+      || Deno.env.get(`HINTILY_${prefix}_CHECKOUT_URL`)
+      || Deno.env.get(`HINTLY_${prefix}_CHECKOUT_URL`)
+      || '',
+    ).trim();
+    if (!productId) continue;
+    if (checkoutUrl && !checkoutUrl.startsWith('https://')) {
+      throw new Error('dodo_checkout_url_invalid');
+    }
+    output[code] = {
+      productId,
+      ...spec,
+      ...(checkoutUrl ? { checkoutUrl } : {}),
+    };
+  }
+  if (Object.keys(output).length === 0) throw new Error('dodo_product_map_missing');
   return output;
 };
 

@@ -107,7 +107,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
 
     private restartStream(): void {
         console.log('[DeepgramStreaming] Restarting due to config change...');
-        this.stopConnection(false);
+        this.stopConnection(false, 'reconfigure');
         this.start();
     }
 
@@ -120,10 +120,13 @@ export class DeepgramStreamingSTT extends EventEmitter {
     }
 
     public stop(): void {
-        this.stopConnection(true);
+        this.stopConnection(true, 'requested');
     }
 
-    private stopConnection(permanent: boolean): void {
+    private stopConnection(
+        permanent: boolean,
+        reason: 'requested' | 'reconfigure' | 'retry_exhausted',
+    ): void {
         const wasRunning = this.isActive || this.isConnecting || this.isOpen || Boolean(this.live);
         this.connectionGeneration++;
         this.shouldReconnect = false;
@@ -142,7 +145,7 @@ export class DeepgramStreamingSTT extends EventEmitter {
         this.isConnecting = false;
         this.isOpen = false;
         this.buffer = [];
-        if (wasRunning) this.emit('stopped', { permanent });
+        if (wasRunning) this.emit('stopped', { permanent, reason });
         console.log('[DeepgramStreaming] Stopped');
     }
 
@@ -349,6 +352,10 @@ export class DeepgramStreamingSTT extends EventEmitter {
         if (this.reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
             console.error(`[DeepgramStreaming] Max reconnect attempts reached — giving up`);
             this.emit('error', new Error('DeepgramStreamingSTT: max reconnect attempts exceeded'));
+            // Retry exhaustion is terminal. Emitting the same permanent-stop
+            // lifecycle event as an explicit stop lets managed sessions restore
+            // a reservation that never reached provider readiness.
+            this.stopConnection(true, 'retry_exhausted');
             return;
         }
 

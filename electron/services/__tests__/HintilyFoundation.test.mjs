@@ -190,11 +190,11 @@ test('managed STT reconnects preserve enforcement and checkout returns survive c
   const ipcHandlers = read('electron/ipcHandlers.ts');
   const managed = read('electron/services/business/HintilyManagedSession.ts');
 
-  assert.match(deepgram, /this\.emit\('stopped', \{ permanent \}\)/);
+  assert.match(deepgram, /this\.emit\('stopped', \{ permanent, reason \}\)/);
   assert.match(deepgram, /connectionGeneration/);
   assert.match(deepgram, /generation !== this\.connectionGeneration/);
   assert.match(main, /dg\.on\('disconnected', disconnectManagedChannel\)/);
-  assert.match(main, /dg\.on\('stopped'.*permanent/s);
+  assert.match(main, /dg\.on\('stopped'.*reason === 'retry_exhausted'/s);
   assert.match(main, /managed\.on\('terminate', stopForAuthChange\)/);
   assert.match(main, /process\.argv\.forEach\(handleHintilyDeepLink\)/);
   assert.match(main, /did-finish-load', flushPendingHintilyCheckoutOutcome/);
@@ -248,11 +248,11 @@ test('managed STT reconnects preserve enforcement and checkout returns survive c
   assert.match(accountSettings, /disabled=\{busy !== null \|\| checkoutBusy\}/);
   assert.match(
     ipcHandlers,
-    /provider === 'hintily'[\s\S]*!managedSession\.activeSessionId[\s\S]*managedSession\.authorize\(\)/,
+    /provider === 'hintily'[\s\S]*!managedSession\.authorizedSessionId[\s\S]*managedSession\.authorize\(\)/,
   );
   assert.match(
     managed,
-    /if \(payload\.exhausted\) \{\s*this\.sessionId = null;\s*this\.connectedChannels = 0;/,
+    /if \(payload\.exhausted\) \{[\s\S]*'time_exhausted'[\s\S]*this\.sessionId = null;[\s\S]*this\.connectedChannels = 0;/,
   );
 });
 

@@ -3,13 +3,16 @@ export interface HintilyAccountState {
   unlimited: boolean;
   remaining_seconds: number;
   trial_remaining_seconds: number;
+  free_session_available?: boolean;
   paid_session_count: number;
   access_revision: string | null;
   active_session: null | {
     id: string;
     client_session_id: string;
     status: 'pending' | 'active' | 'paused';
+    surface?: 'interview_helper' | 'meeting';
     consumed_seconds: number;
+    maximum_seconds?: number | null;
     last_heartbeat_at: string | null;
   };
 }

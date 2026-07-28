@@ -13,6 +13,8 @@ if (!app.isPackaged) {
 const isDev = process.env.NODE_ENV === "development"
 const isDevTest = process.env.IS_DEV_TEST === "true"
 const MOCK_API_WAIT_TIME = Number(process.env.MOCK_API_WAIT_TIME) || 500
+const legacyProviderConfigurationAllowed =
+  !app.isPackaged && process.env.HINTILY_ENABLE_LEGACY_BYOK_DEV === "true"
 
 export class ProcessingHelper {
   private appState: AppState
@@ -24,7 +26,7 @@ export class ProcessingHelper {
     this.appState = appState
 
     // Check if user wants to use Ollama
-    const useOllama = process.env.USE_OLLAMA === "true"
+    const useOllama = legacyProviderConfigurationAllowed && process.env.USE_OLLAMA === "true"
     const ollamaModel = process.env.OLLAMA_MODEL // Don't set default here, let LLMHelper auto-detect
     const ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434"
 
@@ -33,11 +35,11 @@ export class ProcessingHelper {
       this.llmHelper = new LLMHelper(undefined, true, ollamaModel, ollamaUrl)
     } else {
       // Try environment first (for development)
-      let apiKey = process.env.GEMINI_API_KEY
-      let groqApiKey = process.env.GROQ_API_KEY
-      let openaiApiKey = process.env.OPENAI_API_KEY
-      let claudeApiKey = process.env.CLAUDE_API_KEY
-      let deepseekApiKey = process.env.DEEPSEEK_API_KEY
+      let apiKey = legacyProviderConfigurationAllowed ? process.env.GEMINI_API_KEY : undefined
+      let groqApiKey = legacyProviderConfigurationAllowed ? process.env.GROQ_API_KEY : undefined
+      let openaiApiKey = legacyProviderConfigurationAllowed ? process.env.OPENAI_API_KEY : undefined
+      let claudeApiKey = legacyProviderConfigurationAllowed ? process.env.CLAUDE_API_KEY : undefined
+      let deepseekApiKey = legacyProviderConfigurationAllowed ? process.env.DEEPSEEK_API_KEY : undefined
 
       // Allow initializing without key (will be loaded in loadStoredCredentials or via Settings)
       if (!apiKey) {
@@ -55,11 +57,11 @@ export class ProcessingHelper {
   public loadStoredCredentials(): void {
     const credManager = CredentialsManager.getInstance();
 
-    const geminiKey = credManager.getGeminiApiKey();
-    const groqKey = credManager.getGroqApiKey();
-    const openaiKey = credManager.getOpenaiApiKey();
-    const claudeKey = credManager.getClaudeApiKey();
-    const deepseekKey = credManager.getDeepseekApiKey();
+    const geminiKey = legacyProviderConfigurationAllowed ? credManager.getGeminiApiKey() : undefined;
+    const groqKey = legacyProviderConfigurationAllowed ? credManager.getGroqApiKey() : undefined;
+    const openaiKey = legacyProviderConfigurationAllowed ? credManager.getOpenaiApiKey() : undefined;
+    const claudeKey = legacyProviderConfigurationAllowed ? credManager.getClaudeApiKey() : undefined;
+    const deepseekKey = legacyProviderConfigurationAllowed ? credManager.getDeepseekApiKey() : undefined;
 
     if (geminiKey) {
       console.log("[ProcessingHelper] Loading stored Gemini API Key from CredentialsManager");
@@ -86,13 +88,13 @@ export class ProcessingHelper {
       this.llmHelper.setDeepseekApiKey(deepseekKey);
     }
 
-    const litellmBaseURL = credManager.getLitellmBaseURL();
+    const litellmBaseURL = legacyProviderConfigurationAllowed ? credManager.getLitellmBaseURL() : undefined;
     if (litellmBaseURL) {
       console.log("[ProcessingHelper] Loading stored LiteLLM config from CredentialsManager");
       this.llmHelper.setLitellmConfig(credManager.getLitellmApiKey() || '', litellmBaseURL, credManager.getLitellmMaxTokens());
     }
 
-    const nativelyKey = credManager.getNativelyApiKey();
+    const nativelyKey = legacyProviderConfigurationAllowed ? credManager.getNativelyApiKey() : undefined;
     if (nativelyKey) {
       console.log("[ProcessingHelper] Loading stored Natively API Key from CredentialsManager");
       this.llmHelper.setNativelyKey(nativelyKey);
@@ -132,7 +134,7 @@ export class ProcessingHelper {
     });
 
     // NEW: Load Default Model Config
-    const defaultModel = credManager.getDefaultModel();
+    const defaultModel = legacyProviderConfigurationAllowed ? credManager.getDefaultModel() : null;
     if (defaultModel) {
       console.log(`[ProcessingHelper] Loading stored Default Model: ${defaultModel}`);
       const customProviders = credManager.getCustomProviders();

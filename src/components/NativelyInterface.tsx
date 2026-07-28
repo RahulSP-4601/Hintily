@@ -7339,7 +7339,7 @@ Provide only the answer, nothing else.`;
                                 ? wantsMicrophonePane
                                   ? t('Open macOS Microphone privacy settings')
                                   : t('Open macOS Screen Recording privacy settings')
-                                : t('Open Natively Settings')
+                                : t('Open Hintily Settings')
                             }
                           >
                             {deepLinkUrl
@@ -7383,7 +7383,7 @@ Provide only the answer, nothing else.`;
                               }}
                               disabled={tccRepairing}
                               className="px-3 py-1.5 rounded-lg bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-700 dark:text-yellow-500 text-[11px] font-medium transition-all active:scale-95 border border-yellow-500/15 disabled:opacity-60 disabled:cursor-not-allowed"
-                              title={t("Reset macOS permission entries for Natively (you will need to grant them again after relaunch)")}
+                              title={t("Reset macOS permission entries for Hintily (you will need to grant them again after relaunch)")}
                             >
                               {tccRepairing ? t('Resetting…') : t('Repair Permissions')}
                             </button>
@@ -7734,7 +7734,7 @@ Provide only the answer, nothing else.`;
                     data-stealth-ignore="true"
                   >
                     <span className="overlay-text-primary flex-1">
-                      {t('Stealth typing needs Accessibility access. Grant it in System Settings, then restart Natively.')}
+                      {t('Stealth typing needs Accessibility access. Grant it in System Settings, then restart Hintily.')}
                     </span>
                     <button
                       onClick={() => window.electronAPI.stealthTapOpenSettings()}
@@ -7855,18 +7855,8 @@ Provide only the answer, nothing else.`;
                   <div className="flex items-center gap-1.5">
                     <button
                       data-model-selector-toggle="true"
-                      onClick={(e) => {
-                        // Calculate position for detached window
-                        if (!contentRef.current) return;
-                        const contentRect = contentRef.current.getBoundingClientRect();
-                        const buttonRect = e.currentTarget.getBoundingClientRect();
-                        const GAP = 8;
-
-                        const x = window.screenX + buttonRect.left;
-                        const y = window.screenY + contentRect.bottom + GAP;
-
-                        window.electronAPI.toggleModelSelector({ x, y, activate: false });
-                      }}
+                      disabled
+                      aria-label="Hintily managed AI"
                       className={`
                                                 flex items-center gap-2 px-3 py-1.5
                                                 border rounded-lg transition-colors
@@ -7876,31 +7866,7 @@ Provide only the answer, nothing else.`;
                                             `}
                       style={appearance.controlStyle}
                     >
-                      <span className="truncate min-w-0 flex-1">
-                        {(() => {
-                          const m = currentModel;
-                          const codexCliName = getCodexCliModelDisplayName(m);
-                          if (codexCliName) return codexCliName;
-                          if (m.startsWith('ollama-')) return m.replace('ollama-', '');
-                          // For everything else, prefer the authoritative
-                          // displayName from `getCurrentLlmConfig` (handles
-                          // custom-provider UUIDs and any future model aliases
-                          // without each consumer needing its own resolver).
-                          // Falls back to the raw identifier if the IPC has
-                          // not yet resolved.
-                          if (currentModelDisplayName && currentModelDisplayName !== m) {
-                            return currentModelDisplayName;
-                          }
-                          if (m === 'gemini-3.6-flash') return 'Gemini 3.6 Flash';
-                          if (m === 'gemini-3.1-flash-lite') return 'Gemini 3.1 Flash Lite';
-                          if (m === 'gemini-3.1-pro-preview') return 'Gemini 3.1 Pro';
-                          if (m === 'llama-3.3-70b-versatile') return 'Groq Llama 3.3';
-                          if (m === 'gpt-5.4') return 'GPT 5.4';
-                          if (m === 'claude-sonnet-4-6') return 'Sonnet 4.6';
-                          return m;
-                        })()}
-                      </span>
-                      <ChevronDown size={14} className="shrink-0 transition-transform" />
+                      <span className="truncate min-w-0 flex-1">Hintily AI</span>
                     </button>
 
                     <div className="w-px h-3 mx-1" style={appearance.dividerStyle} />
