@@ -36,3 +36,19 @@ export const readJson = async (request: Request, maxBytes = 16_384): Promise<Rec
   if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('invalid_json');
   return parsed as Record<string, unknown>;
 };
+
+export const consumeActionRate = async (
+  client: ReturnType<typeof createClient>,
+  action: string,
+  limit: number,
+  windowSeconds: number,
+): Promise<boolean> => {
+  const { data, error } = await client.rpc('hintily_consume_action_rate', {
+    requested_action: action,
+    requested_limit: limit,
+    requested_window_seconds: windowSeconds,
+  });
+  // Fail closed: an unavailable limiter must never silently disable abuse
+  // protection on a paid/provider-backed operation.
+  return !error && data === true;
+};

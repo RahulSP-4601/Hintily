@@ -1,6 +1,6 @@
 import { corsHeaders } from '../_shared/cors.ts';
 import { productMap } from '../_shared/dodo.ts';
-import { authenticatedClient, json, readJson } from '../_shared/http.ts';
+import { authenticatedClient, consumeActionRate, json, readJson } from '../_shared/http.ts';
 
 const response = (status: number, body: unknown) => json(status, body, corsHeaders);
 
@@ -9,6 +9,9 @@ Deno.serve(async (request) => {
   if (request.method !== 'POST') return response(405, { error: 'method_not_allowed' });
   const auth = await authenticatedClient(request);
   if (!auth) return response(401, { error: 'unauthorized' });
+  if (!await consumeActionRate(auth.client, 'checkout', 5, 600)) {
+    return response(429, { error: 'rate_limit_exceeded' });
+  }
   try {
     const body = await readJson(request);
     const code = String(body.product_code || '');

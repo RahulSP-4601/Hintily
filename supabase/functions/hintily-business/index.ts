@@ -1,5 +1,5 @@
 import { corsHeaders } from '../_shared/cors.ts';
-import { authenticatedClient, json, readJson } from '../_shared/http.ts';
+import { authenticatedClient, consumeActionRate, json, readJson } from '../_shared/http.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const response = (status: number, body: unknown) => json(status, body, corsHeaders);
@@ -24,6 +24,9 @@ Deno.serve(async (request) => {
   const action = url.pathname.split('/').filter(Boolean).at(-1);
   try {
     if (request.method === 'GET' && action === 'state') {
+      if (!await consumeActionRate(auth.client, 'account_refresh', 60, 60)) {
+        return response(429, { error: 'rate_limit_exceeded' });
+      }
       const { data, error } = await auth.client.rpc('hintily_account_state_v2');
       return error ? rpcError(error) : response(200, data);
     }
@@ -38,12 +41,18 @@ Deno.serve(async (request) => {
       });
     }
     if (request.method === 'POST' && action === 'ensure-trial') {
+      if (!await consumeActionRate(auth.client, 'account_refresh', 60, 60)) {
+        return response(429, { error: 'rate_limit_exceeded' });
+      }
       const { data, error } = await auth.client.rpc('hintily_ensure_trial');
       return error ? rpcError(error) : response(200, data);
     }
 
     const body = await readJson(request);
     if (action === 'authorize') {
+      if (!await consumeActionRate(auth.client, 'session_authorize', 12, 60)) {
+        return response(429, { error: 'rate_limit_exceeded' });
+      }
       const clientSessionId = String(body.client_session_id || '');
       const surface = String(body.surface || '');
       if (!UUID.test(clientSessionId)) return response(400, { error: 'invalid_client_session_id' });
@@ -60,6 +69,9 @@ Deno.serve(async (request) => {
     if (!UUID.test(sessionId)) return response(400, { error: 'invalid_session_id' });
 
     if (action === 'stream-ready') {
+      if (!await consumeActionRate(auth.client, 'session_stream_ready', 30, 60)) {
+        return response(429, { error: 'rate_limit_exceeded' });
+      }
       const channel = String(body.channel || '');
       if (channel !== 'interviewer' && channel !== 'user') {
         return response(400, { error: 'invalid_stream_channel' });
@@ -71,12 +83,18 @@ Deno.serve(async (request) => {
       return error ? rpcError(error) : response(200, { ready: data === true });
     }
     if (action === 'activate') {
+      if (!await consumeActionRate(auth.client, 'session_activate', 12, 60)) {
+        return response(429, { error: 'rate_limit_exceeded' });
+      }
       const { data, error } = await auth.client.rpc('hintily_activate_session', {
         requested_session_id: sessionId,
       });
       return error ? rpcError(error) : response(200, data);
     }
     if (action === 'begin-post-processing') {
+      if (!await consumeActionRate(auth.client, 'session_post_processing', 12, 60)) {
+        return response(429, { error: 'rate_limit_exceeded' });
+      }
       const { data, error } = await auth.client.rpc('hintily_begin_post_processing', {
         requested_session_id: sessionId,
       });
@@ -84,6 +102,9 @@ Deno.serve(async (request) => {
     }
     if (action === 'heartbeat') return response(410, { error: 'relay_heartbeat_required' });
     if (action === 'complete') {
+      if (!await consumeActionRate(auth.client, 'session_complete', 20, 60)) {
+        return response(429, { error: 'rate_limit_exceeded' });
+      }
       const failure = body.failure_code == null ? null : String(body.failure_code).slice(0, 80);
       const { data, error } = await auth.client.rpc('hintily_finalize_session', {
         requested_session_id: sessionId,

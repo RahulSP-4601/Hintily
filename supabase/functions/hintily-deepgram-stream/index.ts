@@ -37,6 +37,12 @@ Deno.serve(async (request) => {
   });
   const { data: userData, error: userError } = await client.auth.getUser();
   if (userError || !userData.user) return reject(401, 'unauthorized');
+  const { data: rateAllowed, error: rateError } = await client.rpc('hintily_consume_action_rate', {
+    requested_action: 'deepgram_authorize',
+    requested_limit: 12,
+    requested_window_seconds: 60,
+  });
+  if (rateError || rateAllowed !== true) return reject(429, 'rate_limit_exceeded');
 
   const requestUrl = new URL(request.url);
   const sessionId = requestUrl.searchParams.get('hintily_session_id') || '';

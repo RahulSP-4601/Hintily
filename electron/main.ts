@@ -7007,6 +7007,40 @@ async function initializeApp() {
   // 2. Wait for app to be ready
   logStartupPhase('before-app-whenReady');
   await app.whenReady()
+
+  // Renderer navigation is app-owned. OAuth and checkout already use the
+  // system browser through narrow IPC handlers, so renderer popups, webviews,
+  // and cross-origin navigations have no legitimate use here.
+  app.on('web-contents-created', (_event, contents) => {
+    contents.setWindowOpenHandler(({ url }) => {
+      try {
+        const target = new URL(url);
+        if (target.protocol === 'https:') {
+          shell.openExternal(target.toString());
+        }
+      } catch {
+        // Malformed targets remain denied.
+      }
+      // Never create a renderer-controlled popup. Accepted HTTPS links open in
+      // the user's browser through Electron's main process.
+      return { action: 'deny' };
+    });
+    contents.on('will-attach-webview', event => event.preventDefault());
+    contents.on('will-navigate', (event, targetUrl) => {
+      try {
+        const currentUrl = new URL(contents.getURL());
+        const nextUrl = new URL(targetUrl);
+        const sameRendererDocument = currentUrl.protocol === nextUrl.protocol
+          && currentUrl.host === nextUrl.host
+          && currentUrl.pathname === nextUrl.pathname;
+        if (sameRendererDocument) return;
+      } catch {
+        // Malformed and non-standard navigation targets are denied.
+      }
+      event.preventDefault();
+    });
+  });
+
   if (app.isPackaged) {
     try {
       const migration = migrateLegacyUserData(app.getPath('appData'), app.getPath('userData'));

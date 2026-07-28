@@ -308,8 +308,16 @@ export function HintilyAccountSettings(): React.ReactElement {
                 ? 'Unlimited sessions'
                 : account?.active_session
                   ? `${Math.floor((account.remaining_seconds || 0) / 60)}m ${Math.floor((account.remaining_seconds || 0) % 60)}s in this session`
-                  : `${account?.paid_session_count || 0} paid session${account?.paid_session_count === 1 ? '' : 's'} available`}
+                  : account?.free_session_available
+                    ? `1 free session · ${account.paid_session_count} paid session${account.paid_session_count === 1 ? '' : 's'}`
+                    : `${account?.paid_session_count || 0} paid session${account?.paid_session_count === 1 ? '' : 's'} available`}
             </p>
+            {account?.active_session && (
+              <p className="mt-1 text-xs text-text-secondary">
+                Active in {account.active_session.surface === 'meeting' ? 'Meeting mode' : 'Interview Helper'}
+                {' · '}this session is consumed when it ends
+              </p>
+            )}
             {account?.free_session_available && !account.active_session && (
               <p className="mt-1 text-xs text-emerald-500">Your single-use 20-minute free session is available.</p>
             )}
