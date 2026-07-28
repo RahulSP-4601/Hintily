@@ -55,9 +55,9 @@ Deno.serve(async (request) => {
     .from('business_sessions')
     .select('id')
     .eq('id', sessionId)
-    .eq('status', 'active')
+    .in('status', ['pending', 'active'])
     .maybeSingle();
-  if (sessionError || !businessSession) return reject(403, 'session_not_active');
+  if (sessionError || !businessSession) return reject(403, 'session_not_ready');
   const { error: leaseError } = await client.rpc('hintily_acquire_stream_lease', {
     requested_session_id: sessionId,
     requested_channel: channel,

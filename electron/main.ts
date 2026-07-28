@@ -2674,12 +2674,32 @@ export class AppState {
       const dg = new DeepgramStreamingSTT(leaseOwnerId =>
         managed.connection(speaker, leaseOwnerId));
       let managedChannelConnected = false;
+      let managedChannelConnecting = false;
+      let managedConnectionGeneration = 0;
       const connectManagedChannel = () => {
-        if (managedChannelConnected) return;
-        managedChannelConnected = true;
-        managed.channelConnected(speaker);
+        if (managedChannelConnected || managedChannelConnecting) return;
+        managedChannelConnecting = true;
+        const generation = ++managedConnectionGeneration;
+        void managed.waitForChannelReady(speaker)
+          .then(() => {
+            if (generation !== managedConnectionGeneration) return;
+            managedChannelConnected = true;
+            managed.channelConnected(speaker);
+          })
+          .catch(() => {
+            if (generation === managedConnectionGeneration) {
+              void managed.channelStartupFailed(speaker);
+            }
+          })
+          .finally(() => {
+            if (generation === managedConnectionGeneration) {
+              managedChannelConnecting = false;
+            }
+          });
       };
       const disconnectManagedChannel = () => {
+        managedConnectionGeneration++;
+        managedChannelConnecting = false;
         if (!managedChannelConnected) return;
         managedChannelConnected = false;
         managed.channelDisconnected(speaker);
@@ -5474,6 +5494,17 @@ export class AppState {
     // session on the (still-shared) STT instances.
     const ragManager = this.ragManager;
     this._pendingTeardown = (async () => {
+      let sttReleased = false;
+      const releaseStt = () => {
+        if (sttReleased) return;
+        sttReleased = true;
+        try { this.googleSTT?.stop(); } catch (error) {
+          console.error('[Main] Failed to stop interviewer STT:', error);
+        }
+        try { this.googleSTT_User?.stop(); } catch (error) {
+          console.error('[Main] Failed to stop user STT:', error);
+        }
+      };
       // CRITICAL ORDERING: await the native capture teardown FIRST, before any
       // of the STT/RAG drain below. startMeeting() awaits this whole
       // _pendingTeardown promise before it constructs/starts a new capture, so
@@ -5509,15 +5540,25 @@ export class AppState {
         //    reply to finalize() within 100–200ms). 250ms is conservative.
         await new Promise(resolve => setTimeout(resolve, 250));
 
-        // 2. Tear down STT sockets now that finals have arrived.
-        this.googleSTT?.stop();
-        this.googleSTT_User?.stop();
+        // 2. Convert this live Meeting session into a bounded post-processing
+        // grant while both streams still prove ownership. Once granted, close
+        // Deepgram immediately so relay heartbeats cannot bill time after Stop.
+        try {
+          await HintilyManagedSession.getInstance().beginPostProcessing();
+        } catch (error) {
+          // Persist the meeting even if the backend cannot issue a grant. Its
+          // summary will fail closed instead of keeping a stopped session
+          // billable indefinitely.
+          console.error('[Main] Failed to authorize managed post-processing:', error);
+        }
+        releaseStt();
 
-        // 3. Snapshot transcript + persist placeholder + queue title/summary LLM.
-        //    intelligenceManager.stopMeeting itself runs LLM in background.
+        // 3. Snapshot and persist the meeting. Managed title/summary requests
+        // use the short grant tied to this exact session, not a live STT lease.
         const meetingId = await this.intelligenceManager.stopMeeting();
+        await this.intelligenceManager.waitForMeetingProcessing();
 
-        // 5. RAG cleanup — same logic as before, just inside the BG IIFE.
+        // 4. RAG cleanup — same logic as before, just inside the BG IIFE.
         if (meetingId) {
           if (ragManager) {
             await ragManager.stopLiveIndexing();
@@ -5539,6 +5580,9 @@ export class AppState {
       } catch (err) {
         console.error('[Main] Background meeting teardown failed:', err);
       } finally {
+        // Provider or persistence failures must never leave managed Deepgram
+        // sockets alive and continuing to meter a completed meeting.
+        releaseStt();
         this._isDraining = false;
         this.clearTranscriptThrottle();
       }
@@ -5546,6 +5590,15 @@ export class AppState {
     // endMeeting returns NOW — the IPC handler resolves and the renderer's
     // "Stop" button transitions instantly. Total endMeeting wall-clock time
     // is now bounded by the synchronous block above (~1–5ms typical).
+  }
+
+  public async waitForMeetingTeardown(): Promise<void> {
+    await this._pendingTeardown?.catch((error): void => {
+      console.error('[Main] Meeting teardown did not finish cleanly:', error);
+    });
+    await this.intelligenceManager.waitForMeetingProcessing().catch((error): void => {
+      console.error('[Main] Meeting AI processing did not finish cleanly:', error);
+    });
   }
 
   private async processCompletedMeetingForRAG(meetingId: string): Promise<void> {

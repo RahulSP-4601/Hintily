@@ -4,7 +4,6 @@ import { HintilyAuthService } from '../auth/HintilyAuthService';
 import type {
   HintilyAccountState,
   HintilyBusinessResult,
-  HintilyHeartbeatResult,
   HintilyPurchaseSummary,
   HintilySessionAuthorization,
 } from './types';
@@ -29,7 +28,7 @@ export class HintilyBusinessService {
     action: string,
     method: 'GET' | 'POST',
     body?: Record<string, unknown>,
-    options?: { accessToken?: string; retry?: boolean },
+    options?: { accessToken?: string; retry?: boolean; timeoutMs?: number },
   ): Promise<HintilyBusinessResult<T>> {
     const token = options?.accessToken ?? this.auth.getAccessToken();
     if (!token) return { ok: false, error: 'signed_out', status: 401 };
@@ -37,7 +36,7 @@ export class HintilyBusinessService {
     for (let attempt = 0; attempt < retryDelays.length; attempt++) {
       if (retryDelays[attempt]) await new Promise(resolve => setTimeout(resolve, retryDelays[attempt]));
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      const timer = setTimeout(() => controller.abort(), options?.timeoutMs ?? TIMEOUT_MS);
       try {
         const response = await fetch(
           `${this.config.supabaseUrl}/functions/v1/${functionName}/${action}`,
@@ -86,9 +85,10 @@ export class HintilyBusinessService {
       'hintily-business', 'purchases', 'GET',
     );
   }
-  authorizeSession(clientSessionId: string) {
+  authorizeSession(clientSessionId: string, surface: 'interview_helper' | 'meeting') {
     return this.request<HintilySessionAuthorization>('hintily-business', 'authorize', 'POST', {
       client_session_id: clientSessionId,
+      surface,
     });
   }
   activateSession(sessionId: string) {
@@ -99,13 +99,28 @@ export class HintilyBusinessService {
   checkManagedAiReady(sessionId: string) {
     return this.request<{ ready: boolean }>(
       'hintily-ai', 'ready', 'POST', { session_id: sessionId },
-      { retry: false },
+      // The gateway may probe two managed providers at up to eight seconds
+      // each. Leave enough time for the fallback and readiness-claim cleanup.
+      { retry: false, timeoutMs: 20_000 },
     );
   }
-  heartbeat(sessionId: string, sequenceNo: number, activeSeconds: number) {
-    return this.request<HintilyHeartbeatResult>('hintily-business', 'heartbeat', 'POST', {
-      session_id: sessionId, sequence_no: sequenceNo, active_seconds: activeSeconds,
-    });
+  checkStreamChannelReady(sessionId: string, channel: 'interviewer' | 'user') {
+    return this.request<{ ready: boolean }>(
+      'hintily-business', 'stream-ready', 'POST', {
+        session_id: sessionId,
+        channel,
+      },
+      { retry: false, timeoutMs: 1_000 },
+    );
+  }
+  beginPostProcessing(sessionId: string) {
+    return this.request<{
+      session_id: string;
+      post_processing_until: string;
+      requests_remaining: number;
+    }>('hintily-business', 'begin-post-processing', 'POST', {
+      session_id: sessionId,
+    }, { retry: false });
   }
   captureAccessToken(): string | null {
     return this.auth.getAccessToken();

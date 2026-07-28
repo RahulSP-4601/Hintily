@@ -232,6 +232,10 @@ export class IntelligenceManager extends EventEmitter {
         return this.persistence.stopMeeting();
     }
 
+    async waitForMeetingProcessing(): Promise<void> {
+        await this.persistence.waitForPendingProcessing();
+    }
+
     async recoverUnprocessedMeetings(): Promise<void> {
         return this.persistence.recoverUnprocessedMeetings();
     }

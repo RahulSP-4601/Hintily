@@ -59,6 +59,7 @@ export interface Meeting {
     }>;
     calendarEventId?: string;
     source?: 'manual' | 'calendar';
+    ownerAccountId?: string | null;
     isProcessed?: boolean;
     summaryStatus?: SummaryStatus;
 }
@@ -1330,6 +1331,23 @@ export class DatabaseManager {
             this.db.pragma('user_version = 25');
         }
 
+        // Version 25 → 26: bind locally persisted meetings to the Hintily
+        // account that created them. Automatic managed-summary recovery must
+        // never upload another account's transcript after an account switch.
+        if (version < 26) {
+            console.log('[DatabaseManager] Applying migration v25 → v26: Add meetings.owner_account_id');
+            const hasColumn = this.db.prepare(`PRAGMA table_info(meetings)`).all()
+                .some((col: any) => col.name === 'owner_account_id');
+            if (!hasColumn) {
+                this.db.exec(`ALTER TABLE meetings ADD COLUMN owner_account_id TEXT`);
+            }
+            this.db.exec(`
+                CREATE INDEX IF NOT EXISTS idx_meetings_owner_processing
+                ON meetings(owner_account_id, is_processed, created_at)
+            `);
+            this.db.pragma('user_version = 26');
+        }
+
         console.log('[DatabaseManager] Migrations completed.');
     }
 
@@ -2258,8 +2276,11 @@ export class DatabaseManager {
         }
 
         const insertMeeting = this.db.prepare(`
-            INSERT OR REPLACE INTO meetings (id, title, start_time, duration_ms, summary_json, created_at, calendar_event_id, source, is_processed, summary_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO meetings (
+                id, title, start_time, duration_ms, summary_json, created_at,
+                calendar_event_id, source, is_processed, summary_status, owner_account_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         const insertTranscript = this.db.prepare(`
@@ -2300,7 +2321,8 @@ export class DatabaseManager {
                 meeting.calendarEventId || null,
                 meeting.source || 'manual',
                 meeting.isProcessed ? 1 : 0,
-                meeting.summaryStatus || (meeting.isProcessed ? 'completed' : 'queued')
+                meeting.summaryStatus || (meeting.isProcessed ? 'completed' : 'queued'),
+                meeting.ownerAccountId || null
             );
 
             // 2. Insert Transcript
@@ -2591,6 +2613,7 @@ export class DatabaseManager {
             detailedSummary: summaryData.detailedSummary,
             calendarEventId: meetingRow.calendar_event_id,
             source: meetingRow.source,
+            ownerAccountId: meetingRow.owner_account_id || null,
             summaryStatus: meetingRow.summary_status as SummaryStatus | undefined,
             transcript: transcript,
             usage: usage
@@ -2611,17 +2634,23 @@ export class DatabaseManager {
         }
     }
 
-    public getUnprocessedMeetings(): Meeting[] {
+    public getUnprocessedMeetings(ownerAccountId?: string): Meeting[] {
         if (!this.db) return [];
 
         // is_processed = 0 means false
-        const stmt = this.db.prepare(`
-            SELECT * FROM meetings
-            WHERE is_processed = 0
-            ORDER BY created_at DESC
-        `);
+        const stmt = ownerAccountId
+            ? this.db.prepare(`
+                SELECT * FROM meetings
+                WHERE is_processed = 0 AND owner_account_id = ?
+                ORDER BY created_at DESC
+            `)
+            : this.db.prepare(`
+                SELECT * FROM meetings
+                WHERE is_processed = 0
+                ORDER BY created_at DESC
+            `);
 
-        const rows = stmt.all() as any[];
+        const rows = (ownerAccountId ? stmt.all(ownerAccountId) : stmt.all()) as any[];
 
         return rows.map(row => {
             // Reconstruct minimal meeting object for processing
@@ -2640,6 +2669,7 @@ export class DatabaseManager {
                 detailedSummary: summaryData.detailedSummary,
                 calendarEventId: row.calendar_event_id,
                 source: row.source,
+                ownerAccountId: row.owner_account_id || null,
                 isProcessed: false,
                 summaryStatus: row.summary_status as SummaryStatus | undefined,
                 transcript: [] as any[], // Fetched separately via getMeetingDetails or manually if needed

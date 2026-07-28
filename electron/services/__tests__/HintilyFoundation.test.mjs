@@ -128,9 +128,15 @@ test('phases 5–9 keep grants and metered usage behind server-side functions', 
   assert.match(business, /options\?\.retry === false \? \[0\] : RETRY_DELAYS/);
   assert.match(business, /\{ retry: false \}/);
   assert.match(business, /captureAccessToken/);
-  assert.match(managed, /account\.data\.active_session\?\.client_session_id \?\? randomUUID\(\)/);
-  assert.match(managed, /if \(this\.authorizing\) return this\.authorizing/);
-  assert.match(managed, /if \(this\.authorizing === attempt\) this\.authorizing = null/);
+  assert.match(managed, /existingSession\?\.client_session_id \?\? randomUUID\(\)/);
+  assert.match(
+    managed,
+    /if \(this\.authorizing\) \{[\s\S]*this\.authorizingSurface !== surface[\s\S]*return this\.authorizing/,
+  );
+  assert.match(
+    managed,
+    /if \(this\.authorizing === attempt\) \{[\s\S]*this\.authorizing = null[\s\S]*this\.authorizingSurface = null/,
+  );
   assert.match(managed, /generation !== this\.lifecycleGeneration/);
   assert.match(
     managed,
@@ -248,7 +254,7 @@ test('managed STT reconnects preserve enforcement and checkout returns survive c
   assert.match(accountSettings, /disabled=\{busy !== null \|\| checkoutBusy\}/);
   assert.match(
     ipcHandlers,
-    /provider === 'hintily'[\s\S]*!managedSession\.authorizedSessionId[\s\S]*managedSession\.authorize\(\)/,
+    /provider === 'hintily'[\s\S]*!managedSession\.authorizedSessionId[\s\S]*managedSession\.authorize\(activeHintilySurface \?\? resolveHintilySurface\(\)\)/,
   );
   assert.match(
     managed,

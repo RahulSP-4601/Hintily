@@ -733,6 +733,14 @@ export interface HintilyAccountState {
   free_session_available?: boolean
   paid_session_count: number
   access_revision: string | null
+  unlimited_entitlement?: null | {
+    plan_code: string
+    plan_name: string
+    status: 'trial' | 'active' | 'past_due' | 'cancelled' | 'expired' | 'revoked'
+    starts_at: string
+    ends_at: string | null
+    lifetime: boolean
+  }
   active_session: null | {
     id: string
     client_session_id: string
@@ -750,6 +758,7 @@ export interface HintilySessionAuthorization {
   unlimited: boolean
   remaining_seconds: number | null
   next_sequence_no: number
+  surface?: 'interview_helper' | 'meeting'
 }
 export interface HintilyHeartbeatResult {
   accepted_seconds: number

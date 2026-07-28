@@ -3095,6 +3095,7 @@ const isMultimodal = !!(imagePaths?.length);
     systemPrompt?: string,
     imagePaths?: string[],
     abortSignal?: AbortSignal,
+    purpose: 'live' | 'post_meeting' = 'live',
   ): Promise<string> {
     const { getHintilyConfig } = require('./config/hintily');
     const { HintilyAuthService } = require('./services/auth/HintilyAuthService');
@@ -3103,7 +3104,7 @@ const isMultimodal = !!(imagePaths?.length);
     const accessToken = HintilyAuthService.getInstance().getAccessToken();
     const managedSession = HintilyManagedSession.getInstance();
     if (!accessToken) throw new Error('signed_out');
-    const sessionId = await managedSession.waitUntilActivated();
+    const sessionId = await managedSession.waitUntilActivated(purpose);
     const requestController = new AbortController();
     const unregisterRequest = managedSession.registerAiRequest(requestController);
 
@@ -3152,6 +3153,7 @@ const isMultimodal = !!(imagePaths?.length);
             message: userMessage,
             system: systemPrompt || '',
             images,
+            purpose,
           }),
           signal: AbortSignal.any(signals),
         });
@@ -3171,6 +3173,103 @@ const isMultimodal = !!(imagePaths?.length);
       this.lastProviderModel = payload.model || 'hintily-managed';
       return payload.content;
     } finally {
+      unregisterRequest();
+    }
+  }
+
+  private async *streamWithHintilyManaged(
+    userMessage: string,
+    systemPrompt?: string,
+    imagePaths?: string[],
+    abortSignal?: AbortSignal,
+  ): AsyncGenerator<string, void, unknown> {
+    const { getHintilyConfig } = require('./config/hintily');
+    const { HintilyAuthService } = require('./services/auth/HintilyAuthService');
+    const { HintilyManagedSession } = require('./services/business/HintilyManagedSession');
+    const config = getHintilyConfig();
+    const accessToken = HintilyAuthService.getInstance().getAccessToken();
+    const managedSession = HintilyManagedSession.getInstance();
+    if (!accessToken) throw new Error('signed_out');
+    const sessionId = await managedSession.waitUntilActivated();
+    const requestController = new AbortController();
+    const unregisterRequest = managedSession.registerAiRequest(requestController);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    try {
+      const images: { mime_type: string; data: string }[] = [];
+      let aggregateChars = 0;
+      for (const imagePath of (imagePaths || []).slice(0, 4)) {
+        if (!fs.existsSync(imagePath)) continue;
+        let data = '';
+        for (let quality = 85, dimension = 1920; quality >= 45; quality -= 10,
+          dimension = Math.max(960, Math.floor(dimension * 0.85))) {
+          data = (await sharp(imagePath)
+            .resize(dimension, dimension, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality }).toBuffer()).toString('base64');
+          if (data.length <= 1_500_000) break;
+        }
+        if (!data || data.length > 1_500_000 || aggregateChars + data.length > 4_000_000) {
+          continue;
+        }
+        images.push({ mime_type: 'image/jpeg', data });
+        aggregateChars += data.length;
+      }
+      const signals = [AbortSignal.timeout(50_000), requestController.signal];
+      if (abortSignal) signals.push(abortSignal);
+      const response = await fetch(`${config.supabaseUrl}/functions/v1/hintily-ai/stream`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          apikey: config.supabaseAnonKey,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          'X-Client-Info': 'hintily-desktop',
+        },
+        body: JSON.stringify({
+          session_id: sessionId,
+          message: userMessage,
+          system: systemPrompt || '',
+          images,
+          purpose: 'live',
+        }),
+        signal: AbortSignal.any(signals),
+      });
+      if (!response.ok || !response.body) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error || `managed_ai_http_${response.status}`);
+      }
+      reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split(/\r?\n\r?\n/);
+        buffer = frames.pop() || '';
+        for (const frame of frames) {
+          const dataLine = frame.split(/\r?\n/).find(line => line.startsWith('data:'));
+          if (!dataLine) continue;
+          const payload = JSON.parse(dataLine.slice(5).trim()) as {
+            content?: string; model?: string; done?: boolean;
+          };
+          if (payload.model) this.lastProviderModel = payload.model;
+          if (payload.content) yield payload.content;
+        }
+      }
+    } catch (error) {
+      if (abortSignal?.aborted || requestController.signal.aborted) {
+        throw new Error('request_cancelled');
+      }
+      throw error;
+    } finally {
+      // A caller may stop consuming this async generator before the upstream
+      // response completes. Actively tear down both the fetch and its locked
+      // reader so the Edge relay releases the AI request lease immediately.
+      requestController.abort();
+      if (reader) {
+        try { await reader.cancel(); } catch { /* body may already be closed */ }
+        try { reader.releaseLock(); } catch { /* best effort */ }
+      }
       unregisterRequest();
     }
   }
@@ -6001,14 +6100,7 @@ const isMultimodal = !!(imagePaths?.length);
     } catch { /* managed services unavailable during isolated legacy tests */ }
     if (useHintilyManaged) {
       if (abortSignal?.aborted) throw new Error('request_cancelled');
-      const content = await this.generateWithHintilyManaged(
-        userContent,
-        systemPrompt,
-        imagePaths,
-        abortSignal,
-      );
-      if (abortSignal?.aborted) throw new Error('request_cancelled');
-      yield content;
+      yield* this.streamWithHintilyManaged(userContent, systemPrompt, imagePaths, abortSignal);
       return;
     }
     // ── REAL SSE STREAM (replaces the fake word-by-word simulation) ──────────
@@ -7867,7 +7959,12 @@ const isMultimodal = !!(imagePaths?.length);
    * 3. Gemini Flash (Retry 2x)
    * 4. Gemini Pro (Retry 5x)
    */
-  public async generateMeetingSummary(systemPrompt: string, context: string, groqSystemPrompt?: string): Promise<string> {
+  public async generateMeetingSummary(
+    systemPrompt: string,
+    context: string,
+    groqSystemPrompt?: string,
+    managedPurpose: 'live' | 'post_meeting' = 'post_meeting',
+  ): Promise<string> {
     console.log(`[LLMHelper] generateMeetingSummary called. Context length: ${context.length}`);
     // Short-circuit on empty/whitespace context. With no transcript content to
     // summarise, the provider fallback chain (Natively → Codex → Groq → Gemini
@@ -7888,6 +7985,33 @@ const isMultimodal = !!(imagePaths?.length);
         return this.processResponse(await this.callOllama(`Context:\n${context}`, undefined, systemPrompt));
       }
       context = '';
+    }
+    if (!context.trim()) return '';
+
+    // Packaged Hintily uses the same managed business session for live answers
+    // and post-meeting title/summary generation. Do this before every legacy
+    // provider branch so persisted BYOK/Codex/Natively state cannot bypass the
+    // managed gateway or its session enforcement.
+    let useHintilyManaged = false;
+    try {
+      const { CredentialsManager } = require('./services/CredentialsManager');
+      useHintilyManaged = CredentialsManager.getInstance().getSttProvider() === 'hintily';
+    } catch { /* managed services unavailable during isolated legacy tests */ }
+    if (useHintilyManaged) {
+      const { HintilyManagedSession } = require('./services/business/HintilyManagedSession');
+      const managedSession = HintilyManagedSession.getInstance();
+      if (!managedSession.activeSessionId
+        && !managedSession.authorizedPostProcessingSessionId) {
+        throw new Error('managed_session_required_for_summary');
+      }
+      const text = await this.generateWithHintilyManaged(
+        `Context:\n${context}`,
+        systemPrompt,
+        undefined,
+        undefined,
+        managedPurpose,
+      );
+      return this.processResponse(text);
     }
 
     // Helper: Estimate tokens (crude approximation: 4 chars = 1 token)

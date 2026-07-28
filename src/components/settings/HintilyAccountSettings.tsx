@@ -313,6 +313,24 @@ export function HintilyAccountSettings(): React.ReactElement {
             {account?.free_session_available && !account.active_session && (
               <p className="mt-1 text-xs text-emerald-500">Your single-use 20-minute free session is available.</p>
             )}
+            {account?.unlimited_entitlement && (
+              <p className={`mt-1 text-xs ${
+                account.unlimited ? 'text-emerald-500' : 'text-amber-500'
+              }`}>
+                {account.unlimited_entitlement.plan_name || account.unlimited_entitlement.plan_code}
+                {' · '}
+                {account.unlimited_entitlement.status.replace('_', ' ')}
+                {' · '}
+                {account.unlimited_entitlement.lifetime
+                  ? 'No expiry'
+                  : account.unlimited_entitlement.ends_at
+                    ? `Access until ${new Intl.DateTimeFormat(undefined, {
+                      dateStyle: 'medium',
+                      timeStyle: 'short',
+                    }).format(new Date(account.unlimited_entitlement.ends_at))}`
+                    : 'Expiry unavailable'}
+              </p>
+            )}
             {account?.active_session && !account.unlimited && account.remaining_seconds <= 300 && account.remaining_seconds > 0 && (
               <p className="mt-1 text-xs text-amber-500">Less than five minutes remain.</p>
             )}

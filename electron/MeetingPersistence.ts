@@ -20,10 +20,45 @@ const crypto = require('crypto');
 export class MeetingPersistence {
     private session: SessionTracker;
     private llmHelper: LLMHelper;
+    private pendingProcessing: Promise<void> | null = null;
+    private managedRecoveryArmed = false;
 
     constructor(session: SessionTracker, llmHelper: LLMHelper) {
         this.session = session;
         this.llmHelper = llmHelper;
+    }
+
+    private currentHintilyAccountId(): string | null {
+        try {
+            const { HintilyAuthService } = require('./services/auth/HintilyAuthService');
+            const status = HintilyAuthService.getInstance().getStatus();
+            return status?.state === 'signed_in' ? status.user?.id || null : null;
+        } catch {
+            return null;
+        }
+    }
+
+    private armManagedRecovery(managedSession: {
+        once: (event: string, listener: (payload: {
+            surface?: 'interview_helper' | 'meeting';
+        }) => void) => void;
+    }): void {
+        if (this.managedRecoveryArmed) return;
+        this.managedRecoveryArmed = true;
+        managedSession.once('activated', (event) => {
+            this.managedRecoveryArmed = false;
+            // Re-running the full guard is intentional: it re-checks both the
+            // current account and the surface, and re-arms when Interview
+            // Helper consumed this one-shot event.
+            void this.recoverUnprocessedMeetings().catch(error => {
+                console.error(
+                    event?.surface === 'meeting'
+                        ? '[MeetingPersistence] Deferred meeting recovery failed after activation.'
+                        : '[MeetingPersistence] Could not re-arm recovery after non-meeting activation.',
+                    error,
+                );
+            });
+        });
     }
 
     /**
@@ -78,7 +113,8 @@ export class MeetingPersistence {
             usage: [...this.session.getFullUsage()],
             startTime: this.session.getSessionStartTime(),
             durationMs: durationMs,
-            context: this.session.getFullSessionContext()
+            context: this.session.getFullSessionContext(),
+            ownerAccountId: this.currentHintilyAccountId(),
         };
 
         // BUG-04 fix: snapshot metadata BEFORE reset() clears it so the
@@ -119,6 +155,7 @@ export class MeetingPersistence {
             detailedSummary: { actionItems: [], keyPoints: [] },
             transcript: snapshot.transcript,
             usage: snapshot.usage,
+            ownerAccountId: snapshot.ownerAccountId,
             isProcessed: false,
             summaryStatus: 'queued'
         };
@@ -132,24 +169,42 @@ export class MeetingPersistence {
             console.error("Failed to save placeholder", e);
         }
 
-        this.processAndSaveMeeting(snapshot, meetingId, metadataSnapshot, modeSnapshot).catch(err => {
+        const processing = this.processAndSaveMeeting(
+            snapshot, meetingId, metadataSnapshot, modeSnapshot,
+        ).catch(err => {
             console.error('[MeetingPersistence] Background processing failed:', err);
         });
+        const trackedProcessing = processing.finally(() => {
+            if (this.pendingProcessing === trackedProcessing) this.pendingProcessing = null;
+        });
+        this.pendingProcessing = trackedProcessing;
 
         return meetingId;
+    }
+
+    public async waitForPendingProcessing(): Promise<void> {
+        await this.pendingProcessing;
     }
 
     /**
      * Heavy lifting: LLM Title, Summary, and DB Write
      */
     private async processAndSaveMeeting(
-        data: { transcript: TranscriptSegment[], usage: any[], startTime: number, durationMs: number, context: string },
+        data: {
+            transcript: TranscriptSegment[];
+            usage: any[];
+            startTime: number;
+            durationMs: number;
+            context: string;
+            ownerAccountId: string | null;
+        },
         meetingId: string,
         // BUG-04 fix: accept metadata snapshot so calendar info is not lost after session.reset()
         metadata?: { title?: string; calendarEventId?: string; source?: 'manual' | 'calendar' } | null,
         // BUG-MODE-BLEEDING fix: accept mode snapshot so async summary uses the mode that was
         // active when meeting stopped, not whatever mode is active when async processing runs.
-        modeSnapshot?: { id: string; name: string; templateType: string } | null
+        modeSnapshot?: { id: string; name: string; templateType: string } | null,
+        managedPurpose: 'live' | 'post_meeting' = 'post_meeting',
     ): Promise<void> {
         let title = "Untitled Session";
         let summaryData: any = { actionItems: [], keyPoints: [] };
@@ -204,7 +259,9 @@ export class MeetingPersistence {
                     .map(segment => `${segment.speaker || 'speaker'}: ${segment.text || ''}`)
                     .join('\n')
                     .slice(0, 8000);
-                const generatedTitle = await this.llmHelper.generateMeetingSummary(titlePrompt, titleContext, groqTitlePrompt);
+                const generatedTitle = await this.llmHelper.generateMeetingSummary(
+                    titlePrompt, titleContext, groqTitlePrompt, managedPurpose,
+                );
                 if (generatedTitle) title = generatedTitle.replace(/["*]/g, '').trim();
             }
 
@@ -454,7 +511,9 @@ Return ONLY valid JSON (no markdown code blocks):
                 }
 
                 const fallbackContext = buildBalancedTranscriptContext(data.transcript, 16000);
-                const generatedSummary = await this.llmHelper.generateMeetingSummary(summaryPrompt, fallbackContext, groqSummaryPrompt);
+                const generatedSummary = await this.llmHelper.generateMeetingSummary(
+                    summaryPrompt, fallbackContext, groqSummaryPrompt, managedPurpose,
+                );
 
                 if (generatedSummary) {
                     // Strip markdown fences if present
@@ -574,6 +633,7 @@ Return ONLY valid JSON (no markdown code blocks):
                 usage: data.usage,
                 calendarEventId: calendarEventId,
                 source: source,
+                ownerAccountId: data.ownerAccountId,
                 isProcessed: true,
                 summaryStatus: generationSucceeded || data.transcript.length <= 2 ? 'completed' : 'failed'
             };
@@ -697,10 +757,45 @@ Return ONLY valid JSON (no markdown code blocks):
     public async recoverUnprocessedMeetings(): Promise<void> {
         console.log('[MeetingPersistence] Checking for unprocessed meetings...');
         const db = DatabaseManager.getInstance();
-        const unprocessed = db.getUnprocessedMeetings();
+        let managedOwnerAccountId: string | undefined;
 
+        // Packaged Hintily summaries must consume the same live managed
+        // session as meeting STT. Startup recovery runs before a session is
+        // authorized, so leave these rows queued instead of marking them
+        // permanently failed or routing them through a legacy/BYOK provider.
+        try {
+            const { CredentialsManager } = require('./services/CredentialsManager');
+            if (CredentialsManager.getInstance().getSttProvider() === 'hintily') {
+                const { HintilyManagedSession } = require('./services/business/HintilyManagedSession');
+                const managedSession = HintilyManagedSession.getInstance();
+                const accountId = this.currentHintilyAccountId();
+                if (!accountId) {
+                    console.log(
+                        '[MeetingPersistence] Deferring recovery until a Hintily account is signed in.',
+                    );
+                    this.armManagedRecovery(managedSession);
+                    return;
+                }
+                managedOwnerAccountId = accountId;
+                if (!managedSession.activeSessionId || managedSession.activeSurface !== 'meeting') {
+                    console.log(
+                        '[MeetingPersistence] Deferring recovery until a managed Meeting session is active.',
+                    );
+                    this.armManagedRecovery(managedSession);
+                    return;
+                }
+            }
+        } catch (error) {
+            console.warn(
+                '[MeetingPersistence] Could not inspect managed recovery state; leaving meetings queued.',
+                error,
+            );
+            return;
+        }
+
+        const unprocessed = db.getUnprocessedMeetings(managedOwnerAccountId);
         if (unprocessed.length === 0) {
-            console.log('[MeetingPersistence] No unprocessed meetings found.');
+            console.log('[MeetingPersistence] No account-owned unprocessed meetings found.');
             return;
         }
 
@@ -731,10 +826,15 @@ Return ONLY valid JSON (no markdown code blocks):
                     usage: details.usage,
                     startTime: startTime,
                     durationMs: durationMs,
-                    context: context
+                    context: context,
+                    ownerAccountId: details.ownerAccountId || managedOwnerAccountId || null,
                 };
 
-                await this.processAndSaveMeeting(snapshot, m.id);
+                // Recovery is deliberately performed only while a new managed
+                // Meeting session is live. It therefore consumes that live
+                // session instead of requiring a post-processing grant that
+                // belongs to a previously crashed process.
+                await this.processAndSaveMeeting(snapshot, m.id, null, null, 'live');
                 console.log(`[MeetingPersistence] Recovered meeting ${m.id}`);
 
             } catch (e) {

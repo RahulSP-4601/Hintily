@@ -202,6 +202,8 @@ function stripPriorAssistantTurns(snapshot: string): string {
 }
 
 export function initializeIpcHandlers(appState: AppState): void {
+  type HintilySessionSurface = 'interview_helper' | 'meeting';
+
   const safeHandle = (
     channel: string,
     listener: (event: any, ...args: any[]) => Promise<any> | any,
@@ -216,6 +218,52 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   const hintilyAuth = HintilyAuthService.getInstance();
   const hintilyBusiness = HintilyBusinessService.getInstance();
+  let activeHintilySurface: HintilySessionSurface | null = null;
+  let hintilyMeetingCleanup: Promise<void> | null = null;
+  const resolveHintilySurface = (metadata?: unknown): HintilySessionSurface => {
+    const requestedSurface = metadata && typeof metadata === 'object'
+      ? (metadata as Record<string, unknown>).surface
+      : null;
+    if (requestedSurface === 'interview_helper' || requestedSurface === 'meeting') {
+      return requestedSurface;
+    }
+    const { ModesManager } = require('./services/ModesManager');
+    const templateType = ModesManager.getInstance().getActiveMode()?.templateType;
+    return templateType === 'technical-interview' || templateType === 'looking-for-work'
+      ? 'interview_helper'
+      : 'meeting';
+  };
+  const waitForHintilyMeetingCleanup = async (): Promise<void> => {
+    const pending = hintilyMeetingCleanup;
+    if (pending) await pending;
+  };
+  const beginHintilyMeetingCleanup = (): Promise<void> => {
+    if (hintilyMeetingCleanup) return hintilyMeetingCleanup;
+    const managedSession = HintilyManagedSession.getInstance();
+    const cleanup = (async (): Promise<void> => {
+      let teardownFailed = false;
+      try {
+        await appState.endMeeting();
+        // Title/summary generation is part of the just-ended meeting and must
+        // use that same authorized session. Keep it until all post-meeting AI
+        // and transcript work has settled.
+        await appState.waitForMeetingTeardown();
+      } catch (error) {
+        teardownFailed = true;
+        throw error;
+      } finally {
+        activeHintilySurface = null;
+        await managedSession.stop(teardownFailed ? 'meeting_stop_failed' : undefined);
+      }
+    })();
+    hintilyMeetingCleanup = cleanup;
+    // Clear only this generation. A later cleanup must never be erased by an
+    // older promise settling, and the rejection remains owned by the callers.
+    void cleanup.finally((): void => {
+      if (hintilyMeetingCleanup === cleanup) hintilyMeetingCleanup = null;
+    }).catch((): void => undefined);
+    return cleanup;
+  };
   const accountScopedAbortControllers = new Set<AbortController>();
   const accountScopedCancellers = new Set<() => void>();
   const cancelAccountScopedWork = (): void => {
@@ -301,24 +349,16 @@ export function initializeIpcHandlers(appState: AppState): void {
   });
   safeHandle('hintily-business:authorize-session', (_, clientSessionId: unknown) =>
     afterHintilyAuthReady(() => typeof clientSessionId === 'string' && hintilyUuid.test(clientSessionId)
-      ? hintilyBusiness.authorizeSession(clientSessionId)
+      ? hintilyBusiness.authorizeSession(clientSessionId, 'meeting')
       : { ok: false as const, error: 'invalid_client_session_id' }));
   safeHandle('hintily-business:activate-session', (_, sessionId: unknown) =>
     afterHintilyAuthReady(() => typeof sessionId === 'string' && hintilyUuid.test(sessionId)
       ? hintilyBusiness.activateSession(sessionId)
       : { ok: false as const, error: 'invalid_session_id' }));
-  safeHandle('hintily-business:heartbeat', (_, input: unknown) =>
-    afterHintilyAuthReady(() => {
-      const value = input && typeof input === 'object' ? input as Record<string, unknown> : {};
-      return typeof value.sessionId === 'string' && hintilyUuid.test(value.sessionId)
-        && Number.isInteger(value.sequenceNo) && Number(value.sequenceNo) >= 0
-        && Number.isInteger(value.activeSeconds) && Number(value.activeSeconds) >= 0
-        && Number(value.activeSeconds) <= 300
-        ? hintilyBusiness.heartbeat(
-            value.sessionId, Number(value.sequenceNo), Number(value.activeSeconds),
-          )
-        : { ok: false as const, error: 'invalid_heartbeat' };
-    }));
+  safeHandle('hintily-business:heartbeat', () => ({
+    ok: false as const,
+    error: 'relay_heartbeat_required',
+  }));
   safeHandle('hintily-business:complete-session', (_, input: unknown) =>
     afterHintilyAuthReady(() => {
       const value = input && typeof input === 'object' ? input as Record<string, unknown> : {};
@@ -6541,7 +6581,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       let providerChanged = false;
       try {
         if (needsManagedAuthorization) {
-          await managedSession.authorize();
+          await managedSession.authorize(activeHintilySurface ?? resolveHintilySurface());
           managedSessionAuthorized = true;
         }
         const persisted = CredentialsManager.getInstance().setSttProvider(provider);
@@ -7807,12 +7847,26 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('start-meeting', async (event, metadata?: any) => {
     try {
       const { CredentialsManager } = require('./services/CredentialsManager');
+      // A fast Stop -> Start must wait through both AppState teardown and the
+      // managed-session completion RPC. Authorizing before this barrier can
+      // reuse the old session, which the prior end handler then stops.
+      await waitForHintilyMeetingCleanup();
+      const surface = resolveHintilySurface(metadata);
+      activeHintilySurface = surface;
       if (CredentialsManager.getInstance().getSttProvider() === 'hintily') {
-        await HintilyManagedSession.getInstance().authorize();
+        const managedSession = HintilyManagedSession.getInstance();
+        // A failed prior completion deliberately keeps its session id so the
+        // backend can still be reconciled. Retry that completion instead of
+        // treating the stale id as authorization for this new meeting.
+        if (!appState.getIsMeetingActive() && managedSession.authorizedSessionId) {
+          await managedSession.stop('stale_meeting_cleanup');
+        }
+        await managedSession.authorize(surface);
       }
       await appState.startMeeting(metadata);
       return { success: true };
     } catch (error: any) {
+      activeHintilySurface = null;
       await HintilyManagedSession.getInstance().stop('meeting_start_failed').catch((): void => undefined);
       console.error('Error starting meeting:', error);
       // Forward the structured error code (e.g. 'mic-permission-denied') so the
@@ -7824,11 +7878,9 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   safeHandle('end-meeting', async () => {
     try {
-      await appState.endMeeting();
-      await HintilyManagedSession.getInstance().stop();
+      await beginHintilyMeetingCleanup();
       return { success: true };
     } catch (error: any) {
-      await HintilyManagedSession.getInstance().stop('meeting_stop_failed').catch((): void => undefined);
       console.error('Error ending meeting:', error);
       return { success: false, error: error.message };
     }
