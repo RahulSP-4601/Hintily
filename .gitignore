@@ -442,6 +442,11 @@ traces3/
 --help/
 .remember/
 fixtures/
+# Context OS contamination tests import this synthetic fixture in clean CI
+# checkouts. Keep the broad fixture ignore while explicitly tracking this
+# deterministic, non-secret test input.
+!electron/intelligence/context-os/__tests__/fixtures/
+!electron/intelligence/context-os/__tests__/fixtures/contamination.fixtures.mjs
 tools/
 
 # Vision benchmark source documentation + generated reports
