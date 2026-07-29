@@ -10,30 +10,47 @@ export interface AudioDevice {
     name: string;
 }
 
+export interface AudioDeviceEnumeration {
+    devices: AudioDevice[];
+    ok: boolean;
+}
+
 export class AudioDevices {
-    public static getInputDevices(): AudioDevice[] {
+    public static isNativeModuleAvailable(): boolean {
+        return typeof getInputDevices === 'function' && typeof getOutputDevices === 'function';
+    }
+
+    public static enumerateInputDevices(): AudioDeviceEnumeration {
         if (!getInputDevices) {
-            console.warn('[AudioDevices] Native functionality not available');
-            return [];
+            console.warn('[AudioDevices] Native input-device functionality not available');
+            return { devices: [], ok: false };
         }
         try {
-            return getInputDevices();
+            return { devices: getInputDevices(), ok: true };
         } catch (e) {
             console.error('[AudioDevices] Failed to get input devices:', e);
-            return [];
+            return { devices: [], ok: false };
         }
     }
 
-    public static getOutputDevices(): AudioDevice[] {
+    public static enumerateOutputDevices(): AudioDeviceEnumeration {
         if (!getOutputDevices) {
-            console.warn('[AudioDevices] Native functionality not available');
-            return [];
+            console.warn('[AudioDevices] Native output-device functionality not available');
+            return { devices: [], ok: false };
         }
         try {
-            return getOutputDevices();
+            return { devices: getOutputDevices(), ok: true };
         } catch (e) {
             console.error('[AudioDevices] Failed to get output devices:', e);
-            return [];
+            return { devices: [], ok: false };
         }
+    }
+
+    public static getInputDevices(): AudioDevice[] {
+        return this.enumerateInputDevices().devices;
+    }
+
+    public static getOutputDevices(): AudioDevice[] {
+        return this.enumerateOutputDevices().devices;
     }
 }

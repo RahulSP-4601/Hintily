@@ -808,17 +808,14 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                     ) : (
                         <motion.div
                             key="launcher"
-                            className="flex-1 flex flex-col overflow-hidden"
+                            className="flex-1 flex flex-col overflow-y-auto custom-scrollbar bg-bg-primary"
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
                             transition={{ duration: 0.15 }}
                         >
 
-                            {/* Main Area - Fixed Top, Scrollable Bottom */}
-                            {/* Top Section is now effectively static due to parent flex col */}
-
-                            {/* TOP SECTION: Grey Background (Scrolls with content) */}
+                            {/* TOP SECTION: part of the same scroll flow as setup and history. */}
                             <section className={`${isLight ? 'bg-bg-secondary' : 'bg-bg-elevated'} px-8 pt-6 pb-8 border-b border-border-subtle shrink-0`}>
                                 <div className="max-w-4xl mx-auto space-y-6">
                                     {/* 1.5. Hero Header (Title + Controls + CTA) */}
@@ -1219,8 +1216,8 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                 </div>
                             </section>
 
-                            {/* BOTTOM SECTION: Black Background (Scrollable content) */}
-                            <main className="flex-1 overflow-y-auto custom-scrollbar bg-bg-primary">
+                            {/* BOTTOM SECTION: Black Background */}
+                            <main className="bg-bg-primary">
                                 <section className="px-8 py-8 min-h-full">
                                     <div className="max-w-4xl mx-auto space-y-8">
 

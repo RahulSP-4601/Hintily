@@ -199,10 +199,11 @@ export function LauncherSessionSetup({
   return (
     <section
       aria-labelledby="hintily-session-setup-title"
-      className="relative overflow-hidden rounded-[22px] border border-border-subtle bg-gradient-to-b from-bg-elevated/95 to-bg-main/95 p-6 shadow-[0_24px_70px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.045)]"
+      className="relative overflow-hidden rounded-[22px] border border-emerald-500/20 bg-bg-elevated p-6 shadow-[0_28px_80px_rgba(0,0,0,0.32),0_0_0_1px_rgba(16,185,129,0.025),inset_0_1px_0_rgba(255,255,255,0.055)]"
     >
-      <div className="pointer-events-none absolute -left-24 top-24 h-64 w-64 rounded-full bg-blue-500/[0.055] blur-3xl" />
-      <div className="pointer-events-none absolute -right-24 top-0 h-64 w-64 rounded-full bg-violet-500/[0.05] blur-3xl" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-emerald-300/30 to-transparent" />
+      <div className="pointer-events-none absolute -left-24 top-16 h-72 w-72 rounded-full bg-emerald-400/[0.065] blur-3xl" />
+      <div className="pointer-events-none absolute -right-24 top-0 h-64 w-64 rounded-full bg-teal-400/[0.045] blur-3xl" />
       <div className="relative">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>

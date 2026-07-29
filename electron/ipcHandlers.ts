@@ -7920,6 +7920,19 @@ export function initializeIpcHandlers(appState: AppState): void {
     return AudioDevices.getOutputDevices();
   });
 
+  safeHandle('get-audio-device-status', async () => {
+    const inputs = AudioDevices.enumerateInputDevices();
+    const outputs = AudioDevices.enumerateOutputDevices();
+    return {
+      nativeModuleAvailable: AudioDevices.isNativeModuleAvailable(),
+      inputEnumerationOk: inputs.ok,
+      outputEnumerationOk: outputs.ok,
+      inputs: inputs.devices,
+      outputs: outputs.devices,
+      isPackaged: app.isPackaged,
+    };
+  });
+
   safeHandle('start-audio-test', async (event, deviceId?: string) => {
     await appState.startAudioTest(deviceId);
     return { success: true };

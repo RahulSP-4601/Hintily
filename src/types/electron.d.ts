@@ -256,6 +256,14 @@ export interface ElectronAPI {
   generateSuggestion: (context: string, lastQuestion: string) => Promise<{ suggestion: string }>
   getInputDevices: () => Promise<Array<{ id: string; name: string }>>
   getOutputDevices: () => Promise<Array<{ id: string; name: string }>>
+  getAudioDeviceStatus: () => Promise<{
+    nativeModuleAvailable: boolean
+    inputEnumerationOk: boolean
+    outputEnumerationOk: boolean
+    inputs: Array<{ id: string; name: string }>
+    outputs: Array<{ id: string; name: string }>
+    isPackaged: boolean
+  }>
   setRecognitionLanguage: (key: string) => Promise<{ success: boolean; error?: string }>
   getAiResponseLanguages: () => Promise<Array<{ label: string; code: string }>>
   setAiResponseLanguage: (language: string) => Promise<{ success: boolean; error?: string }>

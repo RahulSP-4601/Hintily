@@ -1,0 +1,57 @@
+name: Build macOS native audio
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build arm64 and x64 native audio
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native-module
+
+      - name: Install JavaScript dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build both macOS architectures
+        run: NATIVELY_BUILD_ALL_MAC_ARCHES=1 npm run build:native
+
+      - name: Verify artifacts
+        run: |
+          set -euo pipefail
+          file native-module/index.darwin-arm64.node
+          file native-module/index.darwin-x64.node
+          file native-module/index.darwin-arm64.node | grep -q arm64
+          file native-module/index.darwin-x64.node | grep -q x86_64
+
+      - name: Upload native-audio binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: hintily-native-audio-macos
+          path: |
+            native-module/index.darwin-arm64.node
+            native-module/index.darwin-x64.node
+          if-no-files-found: error
+          retention-days: 14

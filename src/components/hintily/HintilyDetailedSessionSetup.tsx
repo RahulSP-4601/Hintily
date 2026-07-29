@@ -24,6 +24,7 @@ import { useResolvedTheme } from '../../hooks/useResolvedTheme';
 type Device = { id: string; name: string };
 type PermissionState = Awaited<ReturnType<typeof window.electronAPI.checkPermissions>>;
 type DocumentState = 'missing' | 'ready' | 'processing' | 'error';
+type AudioDiagnostic = 'native-unavailable' | 'enumeration-failed' | null;
 
 interface Draft {
   modeId: string;
@@ -114,6 +115,8 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
   const [modes, setModes] = useState<HintilyMode[]>([]);
   const [modesLoading, setModesLoading] = useState(true);
   const [devicesLoading, setDevicesLoading] = useState(true);
+  const [audioDiagnostic, setAudioDiagnostic] = useState<AudioDiagnostic>(null);
+  const [isPackagedApp, setIsPackagedApp] = useState(true);
   const [inputDevices, setInputDevices] = useState<Device[]>([]);
   const [outputDevices, setOutputDevices] = useState<Device[]>([]);
   const [permissions, setPermissions] = useState<PermissionState | null>(null);
@@ -127,6 +130,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
   const [starting, setStarting] = useState(false);
   const [testingMic, setTestingMic] = useState(false);
   const [error, setError] = useState('');
+  const [readinessError, setReadinessError] = useState('');
   const mountedRef = useRef(true);
   const startRef = useRef(false);
   const resumableSession = account?.active_session?.surface === surface;
@@ -175,31 +179,59 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
     setDevicesLoading(true);
     setPermissionsLoading(true);
     try {
-      const [inputs, outputs, nextPermissions] = await Promise.all([
-        window.electronAPI.getInputDevices(),
-        window.electronAPI.getOutputDevices(),
+      const [deviceResult, permissionsResult] = await Promise.allSettled([
+        window.electronAPI.getAudioDeviceStatus(),
         window.electronAPI.checkPermissions(),
       ]);
       if (!mountedRef.current) return;
-      setInputDevices(inputs);
-      setOutputDevices(outputs);
-      setPermissions(nextPermissions);
-      const preferredInput = draft.inputDeviceId
-        || localStorage.getItem('preferredInputDeviceId')
-        || '';
-      const preferredOutput = draft.outputDeviceId
-        || localStorage.getItem('preferredOutputDeviceId')
-        || '';
-      updateDraft({
-        inputDeviceId: inputs.some(device => device.id === preferredInput)
-          ? preferredInput
-          : (inputs[0]?.id || ''),
-        outputDeviceId: outputs.some(device => device.id === preferredOutput)
-          ? preferredOutput
-          : (outputs[0]?.id || ''),
-      });
+
+      const failures: string[] = [];
+      if (deviceResult.status === 'fulfilled') {
+        const deviceStatus = deviceResult.value;
+        const inputs = deviceStatus.inputs;
+        const outputs = deviceStatus.outputs;
+        setInputDevices(inputs);
+        setOutputDevices(outputs);
+        setIsPackagedApp(deviceStatus.isPackaged);
+        setAudioDiagnostic(
+          !deviceStatus.nativeModuleAvailable
+            ? 'native-unavailable'
+            : (!deviceStatus.inputEnumerationOk || !deviceStatus.outputEnumerationOk)
+              ? 'enumeration-failed'
+              : null,
+        );
+        const preferredInput = draft.inputDeviceId
+          || localStorage.getItem('preferredInputDeviceId')
+          || '';
+        const preferredOutput = draft.outputDeviceId
+          || localStorage.getItem('preferredOutputDeviceId')
+          || '';
+        updateDraft({
+          inputDeviceId: inputs.some(device => device.id === preferredInput)
+            ? preferredInput
+            : (inputs[0]?.id || ''),
+          outputDeviceId: outputs.some(device => device.id === preferredOutput)
+            ? preferredOutput
+            : (outputs[0]?.id || ''),
+        });
+      } else {
+        setInputDevices([]);
+        setOutputDevices([]);
+        setAudioDiagnostic('enumeration-failed');
+        failures.push('Audio devices could not be checked. Restart Hintily and refresh devices.');
+      }
+
+      if (permissionsResult.status === 'fulfilled') {
+        setPermissions(permissionsResult.value);
+      } else {
+        setPermissions(null);
+        failures.push('Audio permissions could not be checked. Open system privacy settings, then restart Hintily.');
+      }
+      setReadinessError(failures.join(' '));
     } catch {
-      if (mountedRef.current) setError('Could not enumerate audio devices or permissions.');
+      // Promise.allSettled itself does not reject; retain a defensive boundary
+      // for unexpected renderer/runtime failures.
+      if (mountedRef.current) setReadinessError('Audio readiness could not be checked. Restart Hintily and retry.');
     } finally {
       if (mountedRef.current) {
         setDevicesLoading(false);
@@ -312,7 +344,10 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
     setError('');
     try {
       await window.electronAPI.requestMicPermission();
-      setPermissions(await window.electronAPI.checkPermissions());
+      // Refresh both permission and device state through the same path used by
+      // the readiness panel so a recovered permission check also clears any
+      // stale readiness failure.
+      await loadDevicesAndPermissions();
     } catch {
       setError('Microphone permission could not be requested. Open system settings and allow Hintily.');
     } finally {
@@ -426,7 +461,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
         title: clean(surface === 'meeting' ? draft.title : `${draft.role} at ${draft.company}`, 200),
         company: clean(draft.company, 160) || undefined,
         role: clean(draft.role, 160) || undefined,
-        context: clean(draft.context, 4_000) || undefined,
+        context: surface === 'meeting' ? clean(draft.context, 4_000) || undefined : undefined,
         participants: surface === 'meeting' ? clean(draft.participants, 2_000) || undefined : undefined,
         calendarEvent: surface === 'meeting' ? selectedCalendarEvent : undefined,
         audio: {
@@ -451,14 +486,14 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
 
   if (!signedIn || !account) return <></>;
 
-  const fieldClass = `w-full rounded-xl border border-border-subtle bg-bg-input px-3.5 py-2.5 text-sm text-text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] outline-none transition placeholder:text-text-tertiary hover:border-border-muted focus:border-accent-primary/60 focus:ring-2 focus:ring-accent-primary/10 ${
+  const fieldClass = `w-full rounded-[14px] border border-border-muted/70 bg-bg-elevated/90 px-4 py-3 text-sm text-text-primary shadow-[0_10px_28px_rgba(0,0,0,0.10),inset_0_1px_0_rgba(255,255,255,0.045)] outline-none transition-all duration-200 placeholder:text-text-tertiary hover:border-emerald-500/25 hover:bg-bg-elevated focus:border-emerald-400/55 focus:ring-4 focus:ring-emerald-500/10 ${
     isDarkTheme ? '[color-scheme:dark]' : '[color-scheme:light]'
   }`;
   const labelClass = 'mb-1.5 block text-[11px] font-semibold text-text-secondary';
 
   return (
-    <div className="mt-6 space-y-5 border-t border-border-subtle pt-6">
-      <section className="rounded-2xl border border-border-subtle bg-bg-card/35 p-5">
+    <div className="mt-5 space-y-4">
+      <section className="rounded-2xl border border-border-subtle bg-bg-primary/35 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
         <div className="mb-4">
           <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-accent-primary">Session details</p>
           <h3 className="mt-1 text-sm font-semibold text-text-primary">Personalize your assistance</h3>
@@ -519,7 +554,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
               onChange={event => setJdText(event.target.value)}
             />
             <button type="button" disabled={jdState === 'processing'} onClick={() => void pasteJobDescription()}
-              className="mt-2 rounded-lg border border-border-subtle px-2.5 py-1.5 text-[11px] text-text-secondary hover:bg-bg-subtle disabled:opacity-50">
+              className="mt-3 inline-flex items-center rounded-xl border border-border-muted/70 bg-bg-primary/40 px-3 py-2 text-[11px] font-medium text-text-secondary shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition hover:border-emerald-500/30 hover:bg-emerald-500/[0.06] hover:text-text-primary disabled:opacity-50">
               Process pasted text
             </button>
           </DocumentCard>
@@ -567,17 +602,17 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
         </div>
       )}
 
-      <div className="mt-4">
-        <label className={labelClass}>
-          {surface === 'meeting' ? 'Meeting purpose/context (optional)' : 'Additional interview context (optional)'}
-        </label>
-        <textarea className={`${fieldClass} min-h-20 resize-y`} maxLength={4_000}
-          value={draft.context}
-          onChange={event => updateDraft({ context: event.target.value })} />
-      </div>
+      {surface === 'meeting' && (
+        <div className="mt-4">
+          <label className={labelClass}>Meeting purpose/context (optional)</label>
+          <textarea className={`${fieldClass} min-h-24 resize-y`} maxLength={4_000}
+            value={draft.context}
+            onChange={event => updateDraft({ context: event.target.value })} />
+        </div>
+      )}
       </section>
 
-      <section className="rounded-2xl border border-border-subtle bg-bg-card/35 p-5">
+      <section className="rounded-2xl border border-border-subtle bg-bg-primary/35 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.025)]">
         <div className="mb-3 flex items-center justify-between">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-accent-primary">Device check</p>
@@ -592,7 +627,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
           </button>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-xl border border-border-subtle bg-bg-main/30 p-3">
+          <div className="rounded-[16px] border border-border-muted/60 bg-bg-elevated/65 p-4 shadow-[0_10px_28px_rgba(0,0,0,0.08),inset_0_1px_0_rgba(255,255,255,0.035)]">
             <label className={labelClass}><Mic size={11} className="mr-1 inline" />Microphone</label>
             <select className={fieldClass} value={draft.inputDeviceId}
               onChange={event => updateDraft({ inputDeviceId: event.target.value })}>
@@ -600,7 +635,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
               {inputDevices.map(device => <option key={device.id} value={device.id}>{device.name}</option>)}
             </select>
           </div>
-          <div className="rounded-xl border border-border-subtle bg-bg-main/30 p-3">
+          <div className="rounded-[16px] border border-border-muted/60 bg-bg-elevated/65 p-4 shadow-[0_10px_28px_rgba(0,0,0,0.08),inset_0_1px_0_rgba(255,255,255,0.035)]">
             <label className={labelClass}><Volume2 size={11} className="mr-1 inline" />System audio/output</label>
             <select className={fieldClass} value={draft.outputDeviceId}
               onChange={event => updateDraft({ outputDeviceId: event.target.value })}>
@@ -609,10 +644,22 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
             </select>
           </div>
         </div>
+        {audioDiagnostic && !devicesLoading && (
+          <div role="alert" className="mt-3 flex items-start gap-2 rounded-xl border border-amber-500/25 bg-amber-500/[0.07] px-3.5 py-3 text-[11px] leading-relaxed text-amber-400">
+            <AlertCircle size={14} className="mt-0.5 shrink-0" />
+            <span>
+              {audioDiagnostic === 'native-unavailable'
+                ? isPackagedApp
+                  ? 'Hintily could not load its audio component. Restart Hintily; if this continues, reinstall the latest release or contact support.'
+                  : <>Hintily&apos;s native audio module is unavailable. Run <code className="font-mono text-amber-300">npm run ensure:native-audio</code>, restart Hintily, then refresh devices.</>
+                : 'Hintily loaded its audio component but could not read one or more device lists. Reconnect the devices, restart Hintily, and refresh.'}
+            </span>
+          </div>
+        )}
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button type="button" onClick={() => void toggleMicTest()}
             disabled={!draft.inputDeviceId || devicesLoading}
-            className="rounded-lg border border-border-subtle px-3 py-1.5 text-[11px] text-text-primary hover:bg-bg-subtle disabled:opacity-50">
+            className="rounded-xl border border-border-muted/70 bg-bg-elevated/70 px-3.5 py-2 text-[11px] font-medium text-text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition hover:border-emerald-500/30 hover:bg-emerald-500/[0.06] disabled:opacity-50">
             {testingMic ? 'Stop microphone test' : 'Test microphone'}
           </button>
           {(micBlocked || screenBlocked) && (
@@ -647,6 +694,11 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
           <AlertCircle size={14} className="mt-0.5 shrink-0" /> {error}
         </div>
       )}
+      {readinessError && (
+        <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/10 p-3 text-xs text-red-400">
+          <AlertCircle size={14} className="mt-0.5 shrink-0" /> {readinessError}
+        </div>
+      )}
 
       <button
         type="button"
@@ -677,12 +729,12 @@ function DocumentCard({
   children?: React.ReactNode;
 }): React.ReactElement {
   return (
-    <div className={`rounded-xl border p-4 transition ${
+    <div className={`rounded-[16px] border p-4 shadow-[0_10px_28px_rgba(0,0,0,0.08),inset_0_1px_0_rgba(255,255,255,0.035)] transition-all duration-200 ${
       state === 'ready'
         ? 'border-emerald-500/25 bg-emerald-500/[0.045]'
         : state === 'error'
           ? 'border-red-500/25 bg-red-500/[0.045]'
-          : 'border-border-subtle bg-bg-main/30'
+          : 'border-border-muted/60 bg-bg-elevated/65 hover:border-emerald-500/20'
     }`}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
@@ -700,7 +752,7 @@ function DocumentCard({
           </div>
         </div>
         <button type="button" disabled={state === 'processing'} onClick={onUpload}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-border-subtle bg-bg-elevated/70 px-2.5 py-1.5 text-[11px] font-medium text-text-secondary transition hover:border-accent-primary/30 hover:bg-bg-subtle hover:text-text-primary disabled:opacity-50">
+          className="inline-flex items-center gap-1.5 rounded-xl border border-border-muted/70 bg-bg-primary/40 px-3 py-2 text-[11px] font-medium text-text-secondary shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] transition hover:border-emerald-500/30 hover:bg-emerald-500/[0.06] hover:text-text-primary disabled:opacity-50">
           {state === 'processing'
             ? <Loader2 size={12} className="animate-spin" />
             : <Upload size={12} />}
