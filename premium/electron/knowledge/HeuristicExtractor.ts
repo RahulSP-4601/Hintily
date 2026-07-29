@@ -2,7 +2,10 @@ import { SKILL_CATEGORIES, type CategorizedSkills } from './DocumentChunker';
 
 const clean = (value: unknown): string => String(value ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 const lines = (text: string): string[] => String(text || '').replace(/\r/g, '').split('\n').map(clean);
-const unique = (values: string[]): string[] => Array.from(new Set(values.map(clean).filter(Boolean)));
+const unique = (values: string[]): string[] => Array.from(new Set(values.flatMap((value) => {
+  const cleaned = clean(value);
+  return cleaned ? [cleaned] : [];
+})));
 const emptySkills = (): CategorizedSkills => Object.fromEntries(
   SKILL_CATEGORIES.map((key): [keyof CategorizedSkills, string[]] => [key, []]),
 ) as CategorizedSkills;
@@ -51,9 +54,10 @@ const looksLikeName = (line: string): boolean => {
 };
 
 const nameFromEmail = (email: string): string => email.split('@')[0]
-  .split(/[._-]+/)
-  .filter(part => part && !/^(email|mail|contact|resume|cv)$/i.test(part))
-  .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+  .split(/[._-]+/).flatMap((part) =>
+    part && !/^(email|mail|contact|resume|cv)$/i.test(part)
+      ? [part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()]
+      : [])
   .join(' ');
 
 const splitList = (value: string): string[] => {
@@ -93,11 +97,17 @@ const skillBucket = (label: string, skill: string): keyof CategorizedSkills => {
 
 const parseSkills = (section: string[]): CategorizedSkills => {
   const result = emptySkills();
+  const knownByBucket = Object.fromEntries(
+    SKILL_CATEGORIES.map((key) => [key, new Set<string>()]),
+  ) as Record<keyof CategorizedSkills, Set<string>>;
   for (const line of section) {
     const label = line.includes(':') ? line.slice(0, line.indexOf(':')) : '';
     for (const skill of splitList(line)) {
       const bucket = skillBucket(label, skill);
-      if (!result[bucket].includes(skill)) result[bucket].push(skill);
+      if (!knownByBucket[bucket].has(skill)) {
+        result[bucket].push(skill);
+        knownByBucket[bucket].add(skill);
+      }
     }
   }
   return result;
@@ -236,13 +246,13 @@ const parseEducation = (section: string[]): any[] => {
     current.push(line);
   }
   if (current.length) groups.push(current);
-  return groups.filter(group => group.some(line => isInstitution(line) || /degree|bachelor|master|b\.?s|m\.?s|b\.?tech|associate|phd/i.test(line)))
-    .map(group => {
+  return groups.flatMap((group) => {
+      if (!group.some(line => isInstitution(line) || /degree|bachelor|master|b\.?s|m\.?s|b\.?tech|associate|phd/i.test(line))) return [];
       const institution = group.find(isInstitution) || '';
       const degreeLine = group.find(line => /bachelor|master|b\.?\s?s|m\.?\s?s|b\.?\s?tech|associate|phd|degree/i.test(line)) || '';
       const field = degreeLine.match(/(?:in|of)\s+([^,(]+?)(?:\s*\(|,|$)/i)?.[1] || '';
       const gpa = group.find(line => /gpa/i.test(line))?.match(/\d+(?:\.\d+)?(?:\/\d+(?:\.\d+)?)?/)?.[0] || '';
-      return { institution: clean(institution.split(',')[0]), degree: clean(degreeLine.replace(/\(.*?\)/g, '').replace(/\d{4}.*$/, '')), field: clean(field), gpa, ...parseDateRange(group.join(' ')) };
+      return [{ institution: clean(institution.split(',')[0]), degree: clean(degreeLine.replace(/\(.*?\)/g, '').replace(/\d{4}.*$/, '')), field: clean(field), gpa, ...parseDateRange(group.join(' ')) }];
     });
 };
 
@@ -287,7 +297,10 @@ export const heuristicJDExtract = (rawText: string): any => {
   const { preamble, sections } = splitSections(rawText);
   const cleanMd = (value: string) => clean(value.replace(/\*\*/g, ''));
   const labeledCompany = preamble.find(line => /^\**company\**\s*:/i.test(line));
-  const candidates = preamble.map(cleanMd).filter(line => !/^location\s*:/i.test(line));
+  const candidates = preamble.flatMap((line) => {
+    const cleaned = cleanMd(line);
+    return /^location\s*:/i.test(cleaned) ? [] : [cleaned];
+  });
   const roleLike = (value: string) => /\b(engineer|developer|manager|director|analyst|designer|consultant|specialist|nurse|intern|coordinator|architect|lead|officer)\b/i.test(value);
   let title = candidates.find(line => /^(?:job description|job title)\s*:/i.test(line))?.replace(/^(?:job description|job title)\s*:\s*/i, '') || '';
   let companyLine = labeledCompany ? cleanMd(labeledCompany).replace(/^company\s*:\s*/i, '') : '';

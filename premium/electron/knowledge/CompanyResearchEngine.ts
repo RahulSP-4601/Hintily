@@ -43,7 +43,10 @@ const cleanText = (value: unknown, max = 4000): string =>
 
 const cleanList = (value: unknown, limit = 12): string[] =>
   Array.isArray(value)
-    ? value.map(item => cleanText(item, 240)).filter(Boolean).slice(0, limit)
+    ? value.flatMap((item) => {
+      const cleaned = cleanText(item, 240);
+      return cleaned ? [cleaned] : [];
+    }).slice(0, limit)
     : [];
 
 const boundedRating = (value: unknown): number | undefined => {
@@ -71,9 +74,10 @@ const parseModelJson = (raw: any): Record<string, any> | null => {
 
 const validSourceIndices = (value: unknown, sourceCount: number): number[] =>
   Array.isArray(value)
-    ? Array.from(new Set(value
-      .map(Number)
-      .filter(index => Number.isInteger(index) && index >= 1 && index <= sourceCount)))
+    ? Array.from(new Set(value.flatMap((item) => {
+      const index = Number(item);
+      return Number.isInteger(index) && index >= 1 && index <= sourceCount ? [index] : [];
+    })))
     : [];
 
 const titleHasCompetingRoleAlternatives = (title: string): boolean => {
@@ -128,12 +132,17 @@ const sourceStatementsFor = (
       if (trimmed.includes('|')) {
         const row = trimmed
           .split('|')
-          .map(cell => cell.trim())
-          .filter(Boolean)
+          .flatMap((cell) => {
+            const value = cell.trim();
+            return value ? [value] : [];
+          })
           .join(' ');
         return /[\p{L}\p{N}]/u.test(row) && !/^[-:\s]+$/.test(row) ? [row] : [];
       }
-      return trimmed.split(/(?:[;•]|\.(?=\s|$))/).map(statement => statement.trim()).filter(Boolean);
+      return trimmed.split(/(?:[;•]|\.(?=\s|$))/).flatMap((statement) => {
+        const value = statement.trim();
+        return value ? [value] : [];
+      });
     })
     .map(statement => ({
       body: statement,
@@ -165,7 +174,7 @@ const sourceNumberMatches = (
   const matches = String(text || '').matchAll(
     /\d+(?:,\d+)*(?:\.\d+)?\s*(k|m|million|thousand|lakh|lakhs|crore|crores|lpa)?/gi,
   );
-  return Array.from(matches).map(match => {
+  return Array.from(matches).flatMap((match) => {
     const raw = Number(match[0].replace(/[^\d.,]/g, '').replace(/,/g, ''));
     const unit = String(match[1] || '').toLowerCase();
     const multiplier = /^(?:k|thousand)$/.test(unit) ? 1_000
@@ -173,12 +182,13 @@ const sourceNumberMatches = (
         : /^(?:lakh|lakhs|lpa)$/.test(unit) ? 100_000
           : /^(?:crore|crores)$/.test(unit) ? 10_000_000
             : 1;
-    return {
+    const result = {
       value: raw * multiplier,
       index: match.index || 0,
       length: match[0].length,
     };
-  }).filter(match => Number.isFinite(match.value));
+    return Number.isFinite(result.value) ? [result] : [];
+  });
 };
 
 const sourceSupportsNumber = (text: string, value: unknown): boolean => {
@@ -196,8 +206,7 @@ const sourceSupportsCurrency = (text: string, currency: string): boolean => {
   ]);
   if (!knownCodes.has(code)) return false;
   const explicitCodes = Array.from(normalized.matchAll(/\b[A-Z]{3}\b/g))
-    .map(match => match[0])
-    .filter(candidate => knownCodes.has(candidate));
+    .flatMap((match) => knownCodes.has(match[0]) ? [match[0]] : []);
   if (new Set(explicitCodes).size > 1) return false;
   if (explicitCodes.includes(code)) return true;
   if (explicitCodes.length > 0) return false;
@@ -258,7 +267,10 @@ const sourceSupportsRating = (
   const supportsEvidence = (evidence: string): boolean => {
     for (const line of evidence.split(/\r?\n/)) {
       if (!line.includes('|')) continue;
-      const cells = line.split('|').map(cell => cell.trim()).filter(Boolean);
+      const cells = line.split('|').flatMap((cell) => {
+        const value = cell.trim();
+        return value ? [value] : [];
+      });
       for (let index = 0; index < cells.length; index++) {
         const normalizedCell = cells[index].toLowerCase();
         const matchesLabel = (labels[field] || []).some(label => normalizedCell === label);
@@ -269,7 +281,7 @@ const sourceSupportsRating = (
     }
     const proseEvidence = evidence.split(/\r?\n/).filter(line => !line.includes('|')).join('\n');
     const normalized = proseEvidence.toLowerCase();
-    return [...(labels[field] || [])].sort((left, right) => right.length - left.length).some(label => {
+    return (labels[field] || []).toSorted((left, right) => right.length - left.length).some(label => {
       let labelIndex = normalized.indexOf(label);
       while (labelIndex >= 0) {
         const beforeCharacter = normalized[labelIndex - 1] || '';
@@ -332,8 +344,7 @@ const textTokens = (value: unknown): string[] => {
 const shortTextTokens = (value: unknown): string[] => {
   const ignored = new Set(['a', 'an', 'and', 'at', 'by', 'for', 'in', 'of', 'on', 'or', 'the', 'to']);
   return Array.from(new Set(cleanText(value).toLowerCase().match(/[a-z0-9]+/g) || []))
-    .filter(token => token.length >= 2 && token.length <= 3)
-    .filter(token => !ignored.has(token));
+    .filter(token => token.length >= 2 && token.length <= 3 && !ignored.has(token));
 };
 
 const containsBoundedText = (source: string, value: string): boolean => {
@@ -373,8 +384,7 @@ const sourceSupportsTitle = (sourceText: string, claim: unknown): boolean => {
     return token;
   };
   const tokens = Array.from(new Set(normalizedClaim.match(/[a-z0-9]+/g) || []))
-    .filter(token => !ignored.has(token))
-    .map(normalizeRoleToken);
+    .flatMap((token) => ignored.has(token) ? [] : [normalizeRoleToken(token)]);
   if (!tokens.length) return containsBoundedText(normalizedSource, normalizedClaim);
   const sourceTokens = new Set(
     (normalizedSource.match(/[a-z0-9]+/g) || []).map(normalizeRoleToken),
@@ -400,7 +410,7 @@ const sanitizeDossier = (
     sources.length,
   );
   const salary = Array.isArray(candidate.salary_estimates)
-    ? candidate.salary_estimates.slice(0, 8).map((item: any) => {
+    ? candidate.salary_estimates.slice(0, 8).flatMap((item: any) => {
       const currency = cleanText(item?.currency, 12);
       const min = positiveAmount(item?.min);
       const max = positiveAmount(item?.max);
@@ -426,7 +436,7 @@ const sanitizeDossier = (
           && supportedTitle
           && supportedLocation;
       });
-      return {
+      const result = {
         title,
         location,
         currency,
@@ -436,10 +446,11 @@ const sanitizeDossier = (
         source_indices: sourceIndices,
         source_supported: supportingStatement,
       };
-    }).filter((item: any) =>
-      item.title && item.currency && item.min !== null && item.max !== null
-      && item.min <= item.max && item.source_indices.length > 0 && item.source_supported)
-      .map(({ source_supported: _supported, ...item }: any) => item)
+      if (!result.title || !result.currency || result.min === null || result.max === null
+        || result.min > result.max || result.source_indices.length === 0 || !result.source_supported) return [];
+      const { source_supported: _supported, ...grounded } = result;
+      return [grounded];
+    })
     : [];
   const groundedText = (field: string, value: unknown): { value: string; source_indices: number[] } => {
     const indices = validSourceIndices(candidate?.source_indices?.[field], sources.length);
@@ -452,10 +463,10 @@ const sanitizeDossier = (
   };
   const groundedList = (field: string, value: unknown): { values: string[]; source_indices: number[] } => {
     const indices = validSourceIndices(candidate?.source_indices?.[field], sources.length);
-    const supportedItems = cleanList(value).map(item => ({
-      item,
-      indices: supportingTextSourceIndices(indices, sources, item),
-    })).filter(item => item.indices.length > 0);
+    const supportedItems = cleanList(value).flatMap((item) => {
+      const supportingIndices = supportingTextSourceIndices(indices, sources, item);
+      return supportingIndices.length > 0 ? [{ item, indices: supportingIndices }] : [];
+    });
     return {
       values: supportedItems.map(item => item.item),
       source_indices: Array.from(new Set(supportedItems.flatMap(item => item.indices))),
@@ -494,21 +505,23 @@ const sanitizeDossier = (
     core_values: coreValues.values,
     critics: Array.isArray(candidate.critics)
       ? candidate.critics.slice(0, 8)
-        .map((item: any) => {
+        .flatMap((item: any) => {
           const indices = validSourceIndices(item?.source_indices, sources.length);
           const supportingIndices = supportingTextSourceIndices(
             indices,
             sources,
             `${item?.title || ''} ${item?.detail || ''}`,
           );
-          return {
+          const result = {
             title: cleanText(item?.title, 160),
             frequency: cleanText(item?.frequency, 80),
             detail: cleanText(item?.detail, 800),
             source_indices: supportingIndices,
           };
+          return (result.title || result.detail) && result.source_indices.length > 0
+            ? [result]
+            : [];
         })
-        .filter((item: any) => (item.title || item.detail) && item.source_indices.length > 0)
       : [],
     recent_news: recentNews.value,
     citations: {
@@ -574,17 +587,21 @@ export class CompanyResearchEngine {
         `${companyName} ${role || 'engineering'} interview process salary`,
         `${companyName} recent hiring news`,
       ];
-      for (const query of queries) {
-        if (requestedOwner !== this.getOwnerScope()) return null;
+      if (requestedOwner !== this.getOwnerScope()) return null;
+      const searchResults = await Promise.all(queries.map(async (query) => {
         try {
-          sources.push(...await this.searchProvider.search(query));
+          return await this.searchProvider!.search(query);
         } catch (error: any) {
           console.warn('[CompanyResearch] Search query failed:', error?.message || error);
+          return [];
         }
-      }
+      }));
+      if (requestedOwner !== this.getOwnerScope()) return null;
+      sources.push(...searchResults.flat());
     }
     const uniqueSources = Array.from(new Map(
-      sources.filter(source => /^https?:\/\//i.test(source.url)).map(source => [source.url, source]),
+      sources.flatMap((source): Array<[string, CompanySearchResult]> =>
+        /^https?:\/\//i.test(source.url) ? [[source.url, source]] : []),
     ).values()).slice(0, 12);
     const evidence = uniqueSources.map((source, index) =>
       `[SOURCE ${index + 1}] ${source.title}\nURL: ${source.url}\nUNTRUSTED WEB CONTENT: ${cleanText(source.content, 2400)}`,

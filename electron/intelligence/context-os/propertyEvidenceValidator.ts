@@ -66,9 +66,11 @@ export function validateEvidenceForProperty(pack: EvidencePack): PropertyEvidenc
     }
   }
 
-  const rejectedIds = factual
-    .filter((i) => !usable.includes(i))
-    .map((i) => i.evidenceId);
+  const usableItems = new Set(usable);
+  const rejectedIds = factual.reduce<string[]>((ids, item) => {
+    if (!usableItems.has(item)) ids.push(item.evidenceId);
+    return ids;
+  }, []);
 
   return {
     ok: usable.length > 0,

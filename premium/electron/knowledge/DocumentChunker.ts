@@ -7,8 +7,19 @@ export const SKILL_CATEGORIES = [
 export type CategorizedSkills = Record<typeof SKILL_CATEGORIES[number], string[]>;
 
 const clean = (value: unknown): string => String(value ?? '').replace(/\s+/g, ' ').trim();
+const cleanNonEmpty = (values: unknown[]): string[] => values.flatMap((value) => {
+  const cleaned = clean(value);
+  return cleaned ? [cleaned] : [];
+});
 const unique = (values: unknown[]): string[] => Array.from(new Set(
-  values.flatMap(value => Array.isArray(value) ? value : [value]).map(clean).filter(Boolean),
+  values.reduce<string[]>((result, value) => {
+    const entries = Array.isArray(value) ? value : [value];
+    for (const entry of entries) {
+      const cleaned = clean(entry);
+      if (cleaned) result.push(cleaned);
+    }
+    return result;
+  }, []),
 ));
 
 const bucketForSkill = (skill: string): keyof CategorizedSkills => {
@@ -35,12 +46,18 @@ export const toCategorizedSkills = (value: unknown): CategorizedSkills => {
   for (const key of SKILL_CATEGORIES) {
     result[key] = unique(Array.isArray(source[key]) ? source[key] as unknown[] : []);
   }
+  const knownByBucket = Object.fromEntries(
+    SKILL_CATEGORIES.map((key) => [key, new Set(result[key])]),
+  ) as Record<keyof CategorizedSkills, Set<string>>;
   for (const skill of unique([
     ...(Array.isArray(source.technical) ? source.technical : []),
     ...(Array.isArray(source.skills_flat) ? source.skills_flat : []),
   ])) {
     const bucket = bucketForSkill(skill);
-    if (!result[bucket].includes(skill)) result[bucket].push(skill);
+    if (!knownByBucket[bucket].has(skill)) {
+      result[bucket].push(skill);
+      knownByBucket[bucket].add(skill);
+    }
   }
   return result;
 };
@@ -70,7 +87,7 @@ const node = (
 };
 
 const serialize = (value: unknown): string => Array.isArray(value)
-  ? value.map(clean).filter(Boolean).join('; ')
+  ? cleanNonEmpty(value).join('; ')
   : clean(value);
 
 export const createDocumentNodes = (
@@ -81,28 +98,31 @@ export const createDocumentNodes = (
   const nodes: Array<KnowledgeNode | null> = [];
   if (docType === DocType.RESUME) {
     const identity = structured.identity || {};
-    nodes.push(node(docType, 'identity', identity.name || 'Candidate identity', [
+    nodes.push(node(docType, 'identity', identity.name || 'Candidate identity', cleanNonEmpty([
       identity.name, identity.location, identity.summary,
-    ].map(clean).filter(Boolean).join(' — '), 'identity'));
+    ]).join(' — '), 'identity'));
     for (const [category, skills] of Object.entries(toCategorizedSkills(structured.skills))) {
       nodes.push(node(docType, `skills_${category}`, `${category} skills`, serialize(skills), `skills.${category}`));
     }
     (Array.isArray(structured.experience) ? structured.experience : []).forEach((entry: any, index: number) => {
-      nodes.push(node(docType, 'experience', entry.role || entry.company || `Experience ${index + 1}`, [
+      nodes.push(node(docType, 'experience', entry.role || entry.company || `Experience ${index + 1}`, cleanNonEmpty([
         entry.role, entry.company, entry.start_date && `${entry.start_date}–${entry.end_date || 'present'}`,
         serialize(entry.bullets), serialize(entry.technologies),
-      ].map(clean).filter(Boolean).join(' | '), `experience.${index}`));
+      ]).join(' | '), `experience.${index}`));
     });
     (Array.isArray(structured.projects) ? structured.projects : []).forEach((entry: any, index: number) => {
-      nodes.push(node(docType, 'projects', entry.name || `Project ${index + 1}`, [
+      nodes.push(node(docType, 'projects', entry.name || `Project ${index + 1}`, cleanNonEmpty([
         entry.description, serialize(entry.highlights), serialize(entry.technologies),
-      ].map(clean).filter(Boolean).join(' | '), `projects.${index}`));
+      ]).join(' | '), `projects.${index}`));
     });
     for (const category of ['education', 'achievements', 'certifications', 'languages', 'leadership']) {
       (Array.isArray(structured[category]) ? structured[category] : []).forEach((entry: any, index: number) => {
         const isObjectEntry = entry && typeof entry === 'object' && !Array.isArray(entry);
         const content = isObjectEntry
-          ? Object.values(entry).map(serialize).filter(Boolean).join(' | ')
+          ? Object.values(entry).flatMap((value) => {
+            const serialized = serialize(value);
+            return serialized ? [serialized] : [];
+          }).join(' | ')
           : serialize(entry);
         nodes.push(node(
           docType,
@@ -114,11 +134,11 @@ export const createDocumentNodes = (
       });
     }
   } else {
-    nodes.push(node(docType, 'jd_summary', structured.title || 'Job description', [
+    nodes.push(node(docType, 'jd_summary', structured.title || 'Job description', cleanNonEmpty([
       structured.title, structured.company, structured.seniority || structured.level,
       structured.employment_type, structured.location, structured.remote,
       structured.description_summary,
-    ].map(clean).filter(Boolean).join(' | '), 'job'));
+    ]).join(' | '), 'job'));
     for (const category of [
       'responsibilities', 'required_skills', 'preferred_skills', 'requirements',
       'nice_to_haves', 'technologies', 'education_requirements',

@@ -32,11 +32,15 @@ export const VisionModelBenchmark: React.FC = () => {
   const [error, setError] = useState('');
   const [selectedRunId, setSelectedRunId] = useState('');
   const [exportPath, setExportPath] = useState('');
+  const selectedModels = useMemo(() => new Set(models), [models]);
 
   useEffect(() => {
     window.electronAPI.visionBenchmarkInfo().then((next) => {
       setInfo(next);
-      setModels(next.models.filter((m: any) => m.enabled).map((m: any) => m.modelId));
+      setModels(next.models.reduce((ids: string[], model: any) => {
+        if (model.enabled) ids.push(model.modelId);
+        return ids;
+      }, []));
       setQuestion(next.defaultQuestion);
     }).catch(() => setError('The benchmark is disabled. Restart with NATIVELY_ENABLE_BENCHMARKS=true.'));
     return window.electronAPI.onVisionBenchmarkProgress((payload) => {
@@ -132,7 +136,7 @@ export const VisionModelBenchmark: React.FC = () => {
           <h3 className="mb-3 text-sm font-semibold text-text-primary">Models</h3>
           <div className="space-y-2">
             {info.models.map((model: any) => <label key={model.modelId} className="flex items-start gap-3 rounded-lg border border-border-subtle bg-bg-input p-3">
-              <input type="checkbox" className="mt-0.5 accent-current" checked={models.includes(model.modelId)}
+              <input type="checkbox" className="mt-0.5 accent-current" checked={selectedModels.has(model.modelId)}
                 onChange={(e) => setModels((prior) => e.target.checked ? [...prior, model.modelId] : prior.filter((id) => id !== model.modelId))} />
               <span className="min-w-0"><span className="block text-sm font-medium text-text-primary">{model.label}</span><span className="block truncate font-mono text-[10px] text-text-secondary">{model.modelId} · {model.source}</span></span>
             </label>)}

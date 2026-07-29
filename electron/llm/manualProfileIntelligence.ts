@@ -328,11 +328,15 @@ const jdEmploymentType = (jd: MaybeStructured<StructuredJobFacts>): string => fi
 const jdMinYears = (jd: MaybeStructured<StructuredJobFacts>): string => firstNonEmpty(jd?.min_years_experience);
 const jdCompensationHint = (jd: MaybeStructured<StructuredJobFacts>): string => firstNonEmpty(jd?.compensation_hint);
 const jdLocation = (jd: MaybeStructured<StructuredJobFacts>): string => firstNonEmpty(jd?.location);
-const jdRequirements = (jd: MaybeStructured<StructuredJobFacts>): string[] => asArray(jd?.requirements).map(clean).filter(Boolean);
-const jdResponsibilities = (jd: MaybeStructured<StructuredJobFacts>): string[] => asArray(jd?.responsibilities).map(clean).filter(Boolean);
-const jdTechnologies = (jd: MaybeStructured<StructuredJobFacts>): string[] => asArray(jd?.technologies).map(clean).filter(Boolean);
-const jdKeywords = (jd: MaybeStructured<StructuredJobFacts>): string[] => asArray(jd?.keywords).map(clean).filter(Boolean);
-const jdNiceToHaves = (jd: MaybeStructured<StructuredJobFacts>): string[] => asArray(jd?.nice_to_haves).map(clean).filter(Boolean);
+const cleanNonEmpty = (items: unknown[]): string[] => items.flatMap((item) => {
+  const value = clean(item);
+  return value ? [value] : [];
+});
+const jdRequirements = (jd: MaybeStructured<StructuredJobFacts>): string[] => cleanNonEmpty(asArray(jd?.requirements));
+const jdResponsibilities = (jd: MaybeStructured<StructuredJobFacts>): string[] => cleanNonEmpty(asArray(jd?.responsibilities));
+const jdTechnologies = (jd: MaybeStructured<StructuredJobFacts>): string[] => cleanNonEmpty(asArray(jd?.technologies));
+const jdKeywords = (jd: MaybeStructured<StructuredJobFacts>): string[] => cleanNonEmpty(asArray(jd?.keywords));
+const jdNiceToHaves = (jd: MaybeStructured<StructuredJobFacts>): string[] => cleanNonEmpty(asArray(jd?.nice_to_haves));
 /** True when the active JD carries any non-title/company structured content. */
 const jdHasStructuredContent = (jd: MaybeStructured<StructuredJobFacts>): boolean =>
   jdRequirements(jd).length > 0 || jdResponsibilities(jd).length > 0
@@ -340,7 +344,7 @@ const jdHasStructuredContent = (jd: MaybeStructured<StructuredJobFacts>): boolea
   || jdNiceToHaves(jd).length > 0 || Boolean(jdSummary(jd));
 
 const formatInlineList = (items: string[], max = 8): string => {
-  const values = items.map(clean).filter(Boolean).slice(0, max);
+  const values = cleanNonEmpty(items).slice(0, max);
   if (values.length === 0) return '';
   if (values.length === 1) return values[0];
   // Two items read "X and Y" — the Oxford comma ("SQL, and Python") only
@@ -390,11 +394,14 @@ const formatIntro = (profile: MaybeStructured<StructuredProfileFacts>, question?
   const cur = exp[0];
   const role = cur ? firstNonEmpty(cur.role, cur.title, cur.position) : '';
   const company = cur ? firstNonEmpty(cur.company, cur.organization, cur.employer) : '';
-  const skills = profileSkills(profile)
-    .map((s) => (typeof s === 'string' ? s : firstNonEmpty(s.name, s.skill)))
-    .filter(Boolean).slice(0, 4);
-  const projects = profileProjects(profile)
-    .map((p) => firstNonEmpty(p.name, p.title)).filter(Boolean).slice(0, 1);
+  const skills = profileSkills(profile).flatMap((skill) => {
+    const value = typeof skill === 'string' ? skill : firstNonEmpty(skill.name, skill.skill);
+    return value ? [value] : [];
+  }).slice(0, 4);
+  const projects = profileProjects(profile).flatMap((project) => {
+    const name = firstNonEmpty(project.name, project.title);
+    return name ? [name] : [];
+  }).slice(0, 1);
   const prior = exp[1] ? firstNonEmpty(exp[1].role, exp[1].title, exp[1].position) : '';
 
   const article = role && /^[aeiou]/i.test(role.trim()) ? 'an' : 'a';
@@ -480,6 +487,10 @@ const experienceSpan = (entry: ProfileExperience): { start: number; end: number;
     role: firstNonEmpty(entry.role, entry.title, entry.position),
   };
 };
+const containsLiteral = (value: string, fragment: string): boolean => {
+  const escaped = fragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(escaped).test(value);
+};
 // Find the experience entry whose company name is referenced in the question
 // (e.g. "EstroTech" in "how long were you at EstroTech Robotics?"). Matches
 // on the first significant token of the company name so "EstroTech" matches
@@ -489,7 +500,7 @@ const findExperienceByCompanyMention = (profile: MaybeStructured<StructuredProfi
     const company = firstNonEmpty(entry.company, entry.organization, entry.employer);
     if (!company) continue;
     const head = company.toLowerCase().split(/[\s,.]+/).filter(Boolean)[0];
-    if (head && head.length >= 4 && q.includes(head)) {
+    if (head && head.length >= 4 && containsLiteral(q, head)) {
       const span = experienceSpan(entry);
       if (span) return span;
     }
@@ -559,13 +570,13 @@ const formatGapBetweenRoles = (profile: MaybeStructured<StructuredProfileFacts>,
   const spans = profileExperience(profile).map(experienceSpan).filter((s): s is NonNullable<typeof s> => s !== null);
   if (spans.length < 2) return '';
   // Sort chronologically ascending by start.
-  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  const sorted = spans.toSorted((a, b) => a.start - b.start);
   // Prefer the pair BOTH explicitly named in the question; else fall back to
   // the two most recent roles (the natural reading of "the gap" with no
   // other context).
   const mentioned = sorted.filter((s) => {
     const head = s.company.toLowerCase().split(/[\s,.]+/).filter(Boolean)[0];
-    return head && head.length >= 4 && q.includes(head);
+    return Boolean(head && head.length >= 4 && containsLiteral(q, head));
   });
   const pair = mentioned.length >= 2 ? mentioned.slice(-2) : sorted.slice(-2);
   const [earlier, later] = pair;
@@ -586,7 +597,7 @@ const formatExperience = (profile: MaybeStructured<StructuredProfileFacts>): str
   const lines = entries.slice(0, 5).map((entry) => {
     const role = firstNonEmpty(entry.role, entry.title, entry.position);
     const company = firstNonEmpty(entry.company, entry.organization, entry.employer);
-    const bullets = asArray(entry.bullets || entry.highlights || entry.responsibilities).map(clean).filter(Boolean);
+    const bullets = cleanNonEmpty(asArray(entry.bullets || entry.highlights || entry.responsibilities));
     const headline = [role, company ? `at ${company}` : ''].filter(Boolean).join(' ');
     const detail = bullets[0] ? ` — ${bullets[0]}` : '';
     return headline ? `${headline}${detail}` : clean(entry);
@@ -600,7 +611,7 @@ const formatProjects = (profile: MaybeStructured<StructuredProfileFacts>): strin
   const lines = entries.slice(0, 6).map((project) => {
     const name = firstNonEmpty(project.name, project.title);
     const description = firstNonEmpty(project.description, project.summary);
-    const tech = formatInlineList(asArray(project.technologies || project.tech_stack || project.tools).map(clean).filter(Boolean), 4);
+    const tech = formatInlineList(cleanNonEmpty(asArray(project.technologies || project.tech_stack || project.tools)), 4);
     if (!name) return clean(project);
     return `${name}${description ? ` — ${description}` : ''}${tech ? ` (${tech})` : ''}`;
   }).filter(Boolean);
@@ -623,7 +634,7 @@ const findProjectByName = (profile: MaybeStructured<StructuredProfileFacts>, q: 
     const name = firstNonEmpty(p.name, p.title);
     if (!name) continue;
     const lowerName = name.toLowerCase();
-    if (q.includes(lowerName)) return p;
+    if (containsLiteral(q, lowerName)) return p;
     const head = lowerName.split(/[\s–—\-:|]+/).filter(Boolean)[0];
     if (head && head.length >= 4 && new RegExp(`\\b${head.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(q)) return p;
   }
@@ -655,7 +666,7 @@ const HAS_DIGIT_RE = /\d/;
 const formatSingleProject = (project: ProfileProject): string => {
   const name = firstNonEmpty(project.name, project.title);
   const description = firstNonEmpty(project.description, project.summary);
-  const tech = formatInlineList(asArray(project.technologies || project.tech_stack || project.tools).map(clean).filter(Boolean), 6);
+  const tech = formatInlineList(cleanNonEmpty(asArray(project.technologies || project.tech_stack || project.tools)), 6);
   if (!name) return '';
   const parts = [`Your project ${name}`];
   if (description) parts.push(`is ${afterCopula(description)}`);
@@ -666,7 +677,7 @@ const formatSingleProject = (project: ProfileProject): string => {
   // 4,000+ users and 500+ stars in one week") that a 1-sentence summary
   // drops. Surface the first highlight containing a number so "how many
   // users/stars did X get?" is answered instead of silently omitted.
-  const highlights = asArray(project.highlights).map(clean).filter(Boolean);
+  const highlights = cleanNonEmpty(asArray(project.highlights));
   const metricHighlight = highlights.find((h) => HAS_DIGIT_RE.test(h) && !description.includes(h));
   const metricSentence = metricHighlight ? ` ${afterCopula(metricHighlight).replace(/^[a-z]/, (m) => m.toUpperCase())}.` : '';
   return `${head}.${metricSentence}${tech ? ` It was built with ${tech}.` : ''}`;
@@ -708,16 +719,19 @@ const findProfileSkill = (profile: MaybeStructured<StructuredProfileFacts>, q: s
   const m = q.match(SKILL_TOKEN_RE);
   if (!m) return null;
   const skill = displaySkillName(profile, m[0]);
-  const all = profileSkills(profile)
-    .map((s) => (typeof s === 'string' ? s : firstNonEmpty(s.name, s.skill)))
-    .filter(Boolean).map((s) => s.toLowerCase());
-  const projects = profileProjects(profile)
-    .filter((p) => {
-      const tech = asArray(p.technologies || p.tech_stack || p.tools).map((t) => clean(t).toLowerCase());
-      const desc = firstNonEmpty(p.description, p.summary).toLowerCase();
-      return tech.some((t) => t.includes(skill.toLowerCase())) || desc.includes(skill.toLowerCase());
-    })
-    .map((p) => firstNonEmpty(p.name, p.title)).filter(Boolean).slice(0, 2);
+  const all = profileSkills(profile).flatMap((item) => {
+    const value = typeof item === 'string' ? item : firstNonEmpty(item.name, item.skill);
+    return value ? [value.toLowerCase()] : [];
+  });
+  const normalizedSkill = skill.toLowerCase();
+  const projects = profileProjects(profile).flatMap((project) => {
+    const tech = asArray(project.technologies || project.tech_stack || project.tools)
+      .map((item) => clean(item).toLowerCase());
+    const desc = firstNonEmpty(project.description, project.summary).toLowerCase();
+    if (!tech.some((item) => item.includes(normalizedSkill)) && !desc.includes(normalizedSkill)) return [];
+    const name = firstNonEmpty(project.name, project.title);
+    return name ? [name] : [];
+  }).slice(0, 2);
   // Only fast-path when the skill is genuinely in the profile (skill list OR a project).
   const inSkills = all.some((s) => s.includes(skill.toLowerCase()) || skill.toLowerCase().includes(s));
   if (!inSkills && projects.length === 0) return null;
@@ -769,9 +783,9 @@ const formatSkillExperience = (profile: MaybeStructured<StructuredProfileFacts>,
       const ex = e as Record<string, unknown>;
       const company = firstNonEmpty(e.company, e.organization, e.employer);
       const role = firstNonEmpty(e.role, e.title, e.position);
-      const bullets = asArray(e.bullets || e.highlights || e.responsibilities).map(clean).filter(Boolean);
+      const bullets = cleanNonEmpty(asArray(e.bullets || e.highlights || e.responsibilities));
       const descOrSummary = firstNonEmpty(ex.description, ex.summary);
-      const techList = asArray(ex.technologies || ex.tech_stack || ex.skills).map(clean).filter(Boolean);
+      const techList = cleanNonEmpty(asArray(ex.technologies || ex.tech_stack || ex.skills));
 
       const matchingBullet = bullets.find((b) => b.toLowerCase().includes(skill.toLowerCase()));
       if (matchingBullet) {
@@ -866,7 +880,10 @@ const formatSkillExperience = (profile: MaybeStructured<StructuredProfileFacts>,
 };
 
 const formatSkills = (profile: MaybeStructured<StructuredProfileFacts>): string => {
-  const skills = profileSkills(profile).map((skill) => typeof skill === 'string' ? skill : firstNonEmpty(skill.name, skill.skill)).filter(Boolean);
+  const skills = profileSkills(profile).flatMap((skill) => {
+    const value = typeof skill === 'string' ? skill : firstNonEmpty(skill.name, skill.skill);
+    return value ? [value] : [];
+  });
   return skills.length ? `Your skills include ${formatInlineList(skills, 12)}.` : '';
 };
 
@@ -880,7 +897,7 @@ const formatSkills = (profile: MaybeStructured<StructuredProfileFacts>): string 
 // dump) when the profile has no categorized languages list (legacy flat
 // skills array only).
 const formatProgrammingLanguages = (profile: MaybeStructured<StructuredProfileFacts>): string => {
-  const languages = asArray((profile as any)?.skills?.languages).map(clean).filter(Boolean);
+  const languages = cleanNonEmpty(asArray((profile as any)?.skills?.languages));
   if (languages.length === 0) return '';
   return `The programming languages I'm strongest in are ${formatInlineList(languages, 8)}.`;
 };
@@ -897,23 +914,26 @@ const formatEducation = (profile: MaybeStructured<StructuredProfileFacts>): stri
   return lines.length ? `Your education includes ${lines.join('; ')}.` : '';
 };
 
-const structuredJobTerms = (jd: MaybeStructured<StructuredJobFacts>): string[] => [
+const structuredJobTerms = (jd: MaybeStructured<StructuredJobFacts>): string[] => cleanNonEmpty([
   ...asArray(jd?.requirements),
   ...asArray(jd?.nice_to_haves),
   ...asArray(jd?.responsibilities),
   ...asArray(jd?.technologies),
   ...asArray(jd?.keywords),
-].map(clean).filter(Boolean);
+]);
 
 const normalizedTermSet = (terms: string[]): Set<string> => new Set(
-  terms
-    .flatMap((term) => term.split(/[^a-zA-Z0-9+#.]+/g))
-    .map((term) => term.trim().toLowerCase())
-    .filter((term) => term.length >= 2),
+  terms.flatMap((term) => term.split(/[^a-zA-Z0-9+#.]+/g).flatMap((token) => {
+    const normalized = token.trim().toLowerCase();
+    return normalized.length >= 2 ? [normalized] : [];
+  })),
 );
 
 const profileSkillNames = (profile: MaybeStructured<StructuredProfileFacts>): string[] =>
-  profileSkills(profile).map((skill) => typeof skill === 'string' ? skill : firstNonEmpty(skill.name, skill.skill)).filter(Boolean);
+  profileSkills(profile).flatMap((skill) => {
+    const value = typeof skill === 'string' ? skill : firstNonEmpty(skill.name, skill.skill);
+    return value ? [value] : [];
+  });
 
 const matchingSkillsForJD = (
   profile: MaybeStructured<StructuredProfileFacts>,
@@ -986,7 +1006,7 @@ const profileEvidenceItem = (
 const compactExperienceEvidence = (entry: ProfileExperience, index: number): ProfileEvidenceItem[] => {
   const role = firstNonEmpty(entry.role, entry.title, entry.position);
   const company = firstNonEmpty(entry.company, entry.organization, entry.employer);
-  const bullets = asArray(entry.bullets || entry.highlights || entry.responsibilities).map(clean).filter(Boolean).slice(0, 3);
+  const bullets = cleanNonEmpty(asArray(entry.bullets || entry.highlights || entry.responsibilities)).slice(0, 3);
   return [
     role ? profileEvidenceItem(`experience.${index}.role`, role, 'profile_resume', `experience:${company || index}`) : null,
     company ? profileEvidenceItem(`experience.${index}.company`, company, 'profile_resume', `experience:${company || index}`) : null,
@@ -999,8 +1019,8 @@ const compactExperienceEvidence = (entry: ProfileExperience, index: number): Pro
 const compactProjectEvidence = (project: ProfileProject, index: number): ProfileEvidenceItem[] => {
   const name = firstNonEmpty(project.name, project.title);
   const description = firstNonEmpty(project.description, project.summary);
-  const tech = asArray(project.technologies || project.tech_stack || project.tools).map(clean).filter(Boolean);
-  const highlights = asArray(project.highlights).map(clean).filter(Boolean).slice(0, 4);
+  const tech = cleanNonEmpty(asArray(project.technologies || project.tech_stack || project.tools));
+  const highlights = cleanNonEmpty(asArray(project.highlights)).slice(0, 4);
   return [
     name ? profileEvidenceItem(`projects.${index}.name`, name, 'projects', `project:${name}`) : null,
     description ? profileEvidenceItem(`projects.${index}.description`, description, 'projects', `project:${name || index}`) : null,
@@ -1059,7 +1079,7 @@ const makeEvidenceSelection = ({
   confidence?: 'high' | 'medium' | 'low';
   recommendedPromptHints?: string[];
 }): ManualProfileRouteResult => {
-  const sourceRefs = Array.from(new Set(items.map((item) => item.sourceRef).filter(Boolean) as string[]));
+  const sourceRefs = Array.from(new Set(items.flatMap((item) => item.sourceRef ? [item.sourceRef] : [])));
   return {
     answerType,
     answerShape: answerType,
@@ -1299,7 +1319,7 @@ export const selectManualProfileEvidence = ({
     if (hasAny(q, GAP_BETWEEN_ROLES_PATTERNS)) {
       const spans = profileExperience(profile).map(experienceSpan).filter((s): s is NonNullable<typeof s> => s !== null);
       if (spans.length >= 2) {
-        const sorted = [...spans].sort((a, b) => a.start - b.start);
+        const sorted = spans.toSorted((a, b) => a.start - b.start);
         const mentioned = sorted.filter((s) => {
           const head = s.company.toLowerCase().split(/[\s,.]+/).filter(Boolean)[0];
           return head && head.length >= 4 && q.includes(head);
@@ -1405,9 +1425,11 @@ export const selectManualProfileEvidence = ({
   if (isSkillExperienceQ) {
     const found = findProfileSkill(profile, q);
     if (found) {
-      const projectItems = profileProjects(profile)
-        .filter((p) => found.projects.includes(firstNonEmpty(p.name, p.title)))
-        .flatMap(compactProjectEvidence);
+      const foundProjects = new Set(found.projects);
+      const projectItems = profileProjects(profile).flatMap((project, index) =>
+        foundProjects.has(firstNonEmpty(project.name, project.title))
+          ? compactProjectEvidence(project, index)
+          : []);
       return makeEvidenceSelection({
         answerType: 'skill_experience_answer',
         selectedContextLayers: ['resume'],
@@ -1425,7 +1447,7 @@ export const selectManualProfileEvidence = ({
 
   if (hasAny(q, SKILL_PATTERNS) && !qualified) {
     const allSkills = ASKS_SPECIFICALLY_ABOUT_LANGUAGES_RE.test(q)
-      ? asArray((profile as any)?.skills?.languages).map(clean).filter(Boolean)
+      ? cleanNonEmpty(asArray((profile as any)?.skills?.languages))
       : profileSkillNames(profile).slice(0, 12);
     if (allSkills.length === 0) return null;
     return makeEvidenceSelection({

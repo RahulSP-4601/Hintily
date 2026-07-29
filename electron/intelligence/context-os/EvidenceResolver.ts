@@ -245,7 +245,7 @@ function salientDistinctiveTerms(distinctive: string[], cardBodies: string[]): s
   for (const term of distinctive) {
     df.set(term, cardWordSets.reduce((acc, set) => acc + (set.has(term) ? 1 : 0), 0));
   }
-  const sorted = [...distinctive].sort((a, b) => (df.get(a)! - df.get(b)!));
+  const sorted = distinctive.toSorted((a, b) => (df.get(a)! - df.get(b)!));
   const minDf = df.get(sorted[0])!;
   const maxDf = df.get(sorted[sorted.length - 1])!;
   // All terms equally frequent → none is more salient; keep all.
@@ -499,7 +499,10 @@ export class EvidenceResolver {
               if (!salient.some((term) => words.has(term))) return false;
               return entities.some((entity) => supportsEntity(it, entity));
             })
-          : salient.some((term) => items.some((it) => contentTokens(it.text).includes(term)));
+          : (() => {
+              const selectedWords = new Set(items.flatMap((it) => contentTokens(it.text)));
+              return salient.some((term) => selectedWords.has(term));
+            })();
         if (!covered) return null;
       }
     }

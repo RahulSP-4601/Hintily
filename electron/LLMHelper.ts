@@ -4403,29 +4403,36 @@ const isMultimodal = !!(imagePaths?.length);
       abortSignal?.addEventListener('abort', onAbort, { once: true });
     });
 
-    for (let rotation = 0; rotation < MAX_FULL_ROTATIONS; rotation++) {
+    const attemptRotation = async function* (rotation: number): AsyncGenerator<string, boolean, unknown> {
       if (abortSignal?.aborted) return;
       if (rotation > 0) {
         const backoffMs = 1000 * rotation;
         console.log(`[LLMHelper] 🔄 Starting rotation ${rotation + 1}/${MAX_FULL_ROTATIONS} after ${backoffMs}ms backoff...`);
         await delayWithAbort(backoffMs).catch((): void => {});
-        if (abortSignal?.aborted) return;
+        if (abortSignal?.aborted) return false;
       }
 
       for (let i = 0; i < providers.length; i++) {
-        if (abortSignal?.aborted) return;
+        if (abortSignal?.aborted) return false;
         const provider = providers[i];
         try {
           console.log(`[LLMHelper] ${rotation === 0 ? '🚀' : '🔁'} Attempting ${provider.name}...`);
           yield* (provider.execute() as any);
           console.log(`[LLMHelper] ✅ ${provider.name} stream completed successfully`);
-          return; // SUCCESS — exit immediately
+          return true; // SUCCESS — exit immediately
         } catch (err: any) {
           console.warn(`[LLMHelper] ⚠️ ${provider.name} failed: ${err.message}`);
           // Continue to next provider
         }
       }
-    }
+
+      return rotation + 1 < MAX_FULL_ROTATIONS
+        ? yield* attemptRotation(rotation + 1)
+        : false;
+    };
+
+    const completed = yield* attemptRotation(0);
+    if (completed || abortSignal?.aborted) return;
 
     // Truly exhausted after all rotations
     console.error(`[LLMHelper] ❌ All providers exhausted after ${MAX_FULL_ROTATIONS} rotations`);
@@ -4564,7 +4571,8 @@ const isMultimodal = !!(imagePaths?.length);
       const front: VisionStreamProvider[] = [];
       if (this.useOllama) { const o = local.find(p => p.id === 'ollama'); if (o) front.push(o); }
       if (this.customProvider) { const c = local.find(p => p.id === 'custom'); if (c) front.push(c); }
-      const backLocal = local.filter(p => !front.includes(p));
+      const frontProviders = new Set(front);
+      const backLocal = local.filter(p => !frontProviders.has(p));
       ordered = [...front, ...orderVisionByHealth(cloud, this.visionHealth, nowMs), ...backLocal];
     }
 
@@ -6233,8 +6241,11 @@ const isMultimodal = !!(imagePaths?.length);
         e?.cause?.code === 'ENOTFOUND' || e?.cause?.code === 'EAI_AGAIN';
 
       let lastErr: unknown;
+      // Cache the signal object, not the boolean: `aborted` can change while
+      // fetch is pending and must still be observed after each await.
+      const streamSignal = streamController.signal;
       for (let attempt = 0; attempt < 3; attempt++) {
-        if (streamController.signal.aborted) break;
+        if (streamSignal.aborted) break;
         try {
           const serializedBody = JSON.stringify(body);
           require('./llm/providerPayloadCapture').captureProviderPayload({
@@ -6247,7 +6258,7 @@ const isMultimodal = !!(imagePaths?.length);
             method: 'POST',
             headers: streamHeaders,
             body: serializedBody,
-            signal: streamController.signal,
+            signal: streamSignal,
           });
           responseStartedAt = nowMs();
           responseStatus = response.status;
@@ -6256,13 +6267,13 @@ const isMultimodal = !!(imagePaths?.length);
           break;
         } catch (fetchErr: any) {
           lastErr = fetchErr;
-          if (!isDnsError(fetchErr) || attempt >= 2 || streamController.signal.aborted) {
+          if (!isDnsError(fetchErr) || attempt >= 2 || streamSignal.aborted) {
             const durationMs = Math.round(nowMs() - streamStartedAt);
             console.error('[NativelyAPI] stream pre-response failure', {
               requestId,
               endpoint: endpointUrl,
               method: 'POST',
-              stage: streamController.signal.aborted ? 'connect_timeout_or_abort' : 'pre_response',
+              stage: streamSignal.aborted ? 'connect_timeout_or_abort' : 'pre_response',
               model: this.currentModelId,
               provider: 'natively',
               connectTimeoutMs,

@@ -142,6 +142,7 @@ export function extractConceptCards(sections: ExtractedSectionCard[], bundleDir:
   const takenSlugs = sharedSlugs ?? new Set<string>();
   const out: BuiltCardDraft[] = [];
   for (const s of sections) {
+    const { num, pageStart, pageEnd } = s.section;
     const slug = uniqueSlug(s.title, takenSlugs);
     const conceptId = conceptIdFor(bundleDir, slug);
     out.push({
@@ -150,9 +151,9 @@ export function extractConceptCards(sections: ExtractedSectionCard[], bundleDir:
       slug,
       conceptId,
       body: s.body,
-      sourcePages: s.section.pageStart === s.section.pageEnd ? [s.section.pageStart] : [s.section.pageStart, s.section.pageEnd],
-      sourceSections: s.section.num ? [`${s.section.num} ${s.title}`] : [s.title],
-      sourceQuotes: [{ text: s.quoteText, page: s.section.pageStart, section: s.section.num || undefined }],
+      sourcePages: pageStart === pageEnd ? [pageStart] : [pageStart, pageEnd],
+      sourceSections: num ? [`${num} ${s.title}`] : [s.title],
+      sourceQuotes: [{ text: s.quoteText, page: pageStart, section: num || undefined }],
       entities: s.entities,
     });
   }

@@ -1076,13 +1076,17 @@ export class ModeContextRetriever {
             // the boost. Appended (not replacing) so the primary query targets
             // still lead.
             if (referentEnrichment) {
+                const knownTargets = new Set(targetList);
                 for (const source of sources) {
                     if (source.type !== 'reference_file') continue;
                     const map = getCachedDocumentMap(source.id, source.content);
                     if (!map.hasToc) continue;
                     const entTargets = resolveTargetSections(referentEnrichment, map);
                     for (const et of entTargets) {
-                        if (!targetList.includes(et)) targetList.push(et);
+                        if (!knownTargets.has(et)) {
+                            targetList.push(et);
+                            knownTargets.add(et);
+                        }
                     }
                 }
             }
@@ -1186,9 +1190,12 @@ export class ModeContextRetriever {
         // based (≥4 chars) so "parameters"/"parameter" and "format"/"formats"
         // unify without a full stemmer.
         const queryContentStems = forceDocumentGrounding && documentRetrievalQuery
-            ? [...new Set(wordsOf(documentRetrievalQuery))]
-                .filter(w => w.length >= 4 && !DOC_GROUNDED_STOPWORDS.has(w))
-                .map(w => w.slice(0, Math.max(4, w.length - 1))) // crude stem: drop trailing plural/inflection
+            ? [...new Set(wordsOf(documentRetrievalQuery))].reduce<string[]>((stems, word) => {
+                if (word.length >= 4 && !DOC_GROUNDED_STOPWORDS.has(word)) {
+                    stems.push(word.slice(0, Math.max(4, word.length - 1)));
+                }
+                return stems;
+            }, [])
             : [];
         const contentWordBonus = (chunk: string): number => {
             if (queryContentStems.length === 0) return 0;
@@ -1316,9 +1323,10 @@ export class ModeContextRetriever {
                 // no entities are present in the query (broad / vague questions),
                 // so the original behaviour is preserved for entity-less questions.
                 const ownEntityTerms = forceDocumentGrounding && documentRetrievalQuery
-                    ? extractHighSignalEntityTerms(documentRetrievalQuery)
-                        .filter(t => !/^\d[\d.,]*$/.test(t.trim()))   // drop pure numbers
-                        .map(t => t.toLowerCase())
+                    ? extractHighSignalEntityTerms(documentRetrievalQuery).reduce<string[]>((terms, term) => {
+                        if (!/^\d[\d.,]*$/.test(term.trim())) terms.push(term.toLowerCase());
+                        return terms;
+                    }, [])
                     : [];
                 for (const source of sources) {
                     for (const chunk of chunksForSource(source)) {
@@ -1660,17 +1668,23 @@ export class ModeContextRetriever {
     async retryLexicalOnlyFiles(files: ModeReferenceFile[]): Promise<void> {
         const retriever = this.ensureHybridRetriever();
         if (!retriever) return;
-        for (const file of files) {
-            try {
-                const { status } = retriever.getFileIndexStatus(file.id);
-                if (status === 'lexical_only' || status === 'failed' || status === 'pending') {
-                    console.log(`[ModeContextRetriever] re-indexing "${file.fileName}" (was ${status})`);
-                    await retriever.indexFile(file);
+        const concurrency = Math.min(3, files.length);
+        let nextIndex = 0;
+        const worker = async (): Promise<void> => {
+            while (nextIndex < files.length) {
+                const file = files[nextIndex++];
+                try {
+                    const { status } = retriever.getFileIndexStatus(file.id);
+                    if (status === 'lexical_only' || status === 'failed' || status === 'pending') {
+                        console.log(`[ModeContextRetriever] re-indexing "${file.fileName}" (was ${status})`);
+                        await retriever.indexFile(file);
+                    }
+                } catch (e) {
+                    console.warn(`[ModeContextRetriever] retryLexicalOnlyFiles failed for "${file.fileName}":`, e instanceof Error ? e.message : e);
                 }
-            } catch (e) {
-                console.warn(`[ModeContextRetriever] retryLexicalOnlyFiles failed for "${file.fileName}":`, e instanceof Error ? e.message : e);
             }
-        }
+        };
+        await Promise.all(Array.from({ length: concurrency }, () => worker()));
     }
 
     /**

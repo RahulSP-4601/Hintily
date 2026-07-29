@@ -197,10 +197,13 @@ export function LocalWhisperModelPanel() {
                 setDownloadingSet(nextDownloading);
                 setDownloadProgress(prev => ({ ...prev, ...nextProgress }));
                 if (interruptedIds.length || cancelledIds.length || errorIds.length) {
+                    const interruptedSet = new Set(interruptedIds);
+                    const cancelledSet = new Set(cancelledIds);
+                    const errorSet = new Set(errorIds);
                     setModels(prev => prev.map(m => {
-                        if (interruptedIds.includes(m.id)) return { ...m, status: 'interrupted' as const };
-                        if (cancelledIds.includes(m.id)) return { ...m, status: 'cancelled' as const };
-                        if (errorIds.includes(m.id)) return { ...m, status: 'error' as const, errorMessage: 'Download was interrupted.' };
+                        if (interruptedSet.has(m.id)) return { ...m, status: 'interrupted' as const };
+                        if (cancelledSet.has(m.id)) return { ...m, status: 'cancelled' as const };
+                        if (errorSet.has(m.id)) return { ...m, status: 'error' as const, errorMessage: 'Download was interrupted.' };
                         return m;
                     }));
                 }

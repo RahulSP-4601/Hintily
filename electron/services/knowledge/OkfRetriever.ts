@@ -80,8 +80,8 @@ function scoreCard(
     bodyScore = queryWords.size > 0 ? bodyHits / queryWords.size : 0;
   }
 
-  const entityLower = card.entities.map((e) => e.toLowerCase());
-  const entityHits = targetEntities.filter((e) => entityLower.includes(e.toLowerCase())).length;
+  const entityLower = new Set(card.entities.map((e) => e.toLowerCase()));
+  const entityHits = targetEntities.filter((e) => entityLower.has(e.toLowerCase())).length;
   const entityScore = targetEntities.length > 0 ? entityHits / targetEntities.length : 0;
 
   // Exact title match (case-insensitive) is a strong signal for entity_lookup questions.

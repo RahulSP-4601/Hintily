@@ -486,8 +486,12 @@ export class HindsightManager {
       const parts = existing ? existing.split(':') : [];
       // Prepend extras that aren't already present, preserving the inherited PATH after them.
       const merged: string[] = [];
+      const mergedPaths = new Set<string>();
       for (const p of [...extras, ...parts]) {
-        if (p && !merged.includes(p)) merged.push(p);
+        if (p && !mergedPaths.has(p)) {
+          merged.push(p);
+          mergedPaths.add(p);
+        }
       }
       return merged.join(':');
     } catch {
@@ -662,10 +666,12 @@ export class HindsightManager {
     }
 
     if (Object.keys(extra).length > 0) {
-      const providerList = Object.keys(extra)
-        .filter((k) => k.endsWith('_API_KEY') || k === 'HINDSIGHT_LLM_ENABLE_OLLAMA')
-        .map((k) => k.replace('_API_KEY', '').replace('HINDSIGHT_LLM_ENABLE_', '').toLowerCase())
-        .join(', ');
+      const providerList = Object.keys(extra).reduce<string[]>((providers, key) => {
+        if (key.endsWith('_API_KEY') || key === 'HINDSIGHT_LLM_ENABLE_OLLAMA') {
+          providers.push(key.replace('_API_KEY', '').replace('HINDSIGHT_LLM_ENABLE_', '').toLowerCase());
+        }
+        return providers;
+      }, []).join(', ');
       console.log(`[HindsightManager] credential env: forwarding providers → ${providerList || 'none'}`);
     } else {
       console.warn('[HindsightManager] credential env: no provider keys found — Hindsight server will fall back to its own env defaults');

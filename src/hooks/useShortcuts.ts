@@ -2,6 +2,17 @@ import { useState, useEffect, useCallback } from 'react';
 import { acceleratorToKeys, keysToAccelerator } from '../utils/keyboardUtils';
 import { getPlatformShortcut, isMac } from '../utils/platformUtils';
 
+const COMMAND_OR_CONTROL_KEYS = new Set(['⌘', 'Command', 'Meta', 'CommandOrControl']);
+const CONTROL_KEYS = new Set(['⌃', 'Control', 'Ctrl']);
+const ALT_KEYS = new Set(['⌥', 'Alt', 'Option']);
+const SHIFT_KEYS = new Set(['⇧', 'Shift']);
+const MODIFIER_KEYS = new Set([
+    ...COMMAND_OR_CONTROL_KEYS,
+    ...CONTROL_KEYS,
+    ...ALT_KEYS,
+    ...SHIFT_KEYS,
+]);
+
 // Define the shape of our shortcuts configuration
 export interface ShortcutConfig {
     whatToAnswer: string[];
@@ -224,14 +235,14 @@ export const useShortcuts = () => {
         // On Mac: ⌘ = metaKey. On Win/Linux: Ctrl maps to ctrlKey.
         // 'CommandOrControl' (⌘/Ctrl) matches metaKey on Mac, ctrlKey on Win/Linux.
         const isCommandOrControl = (k: string) =>
-            ['⌘', 'Command', 'Meta', 'CommandOrControl'].includes(k);
+            COMMAND_OR_CONTROL_KEYS.has(k);
         const isCtrl = (k: string) =>
-            ['⌃', 'Control', 'Ctrl'].includes(k);
+            CONTROL_KEYS.has(k);
 
         const hasCommandOrControl = keys.some(isCommandOrControl);
         const hasCtrlOnly = !hasCommandOrControl && keys.some(isCtrl);
-        const hasAlt = keys.some(k => ['⌥', 'Alt', 'Option'].includes(k));
-        const hasShift = keys.some(k => ['⇧', 'Shift'].includes(k));
+        const hasAlt = keys.some(k => ALT_KEYS.has(k));
+        const hasShift = keys.some(k => SHIFT_KEYS.has(k));
 
         if (isMac) {
             // On Mac: ⌘ = metaKey, ⌃ = ctrlKey
@@ -247,9 +258,7 @@ export const useShortcuts = () => {
         if (event.shiftKey !== hasShift) return false;
 
         // Find the main non-modifier key
-        const mainKey = keys.find(k =>
-            !['⌘', 'Command', 'Meta', '⇧', 'Shift', '⌥', 'Alt', 'Option', '⌃', 'Control', 'Ctrl'].includes(k)
-        );
+        const mainKey = keys.find(k => !MODIFIER_KEYS.has(k));
 
         if (!mainKey) return false; // Modifiers only
 

@@ -102,9 +102,10 @@ const arrayEntryIdentity = (value: any, prefix: string): string => {
   }
   const root = prefix.split('.')[0];
   const fields = ARRAY_IDENTITY_FIELDS[root] || ['id', 'name', 'title'];
-  const parts = fields
-    .map(field => String(value?.[field] ?? '').trim().toLowerCase())
-    .filter(Boolean);
+  const parts = fields.flatMap((field) => {
+    const part = String(value?.[field] ?? '').trim().toLowerCase();
+    return part ? [part] : [];
+  });
   return parts.length ? `object:${parts.join('\u001f')}` : `object:${JSON.stringify(value)}`;
 };
 
@@ -112,8 +113,11 @@ const arrayEntrySimilarity = (left: any, right: any): number => {
   if (!left || !right || typeof left !== 'object' || typeof right !== 'object'
     || Array.isArray(left) || Array.isArray(right)) return 0;
   const keys = Array.from(new Set([...Object.keys(left), ...Object.keys(right)]))
-    .filter(key => !key.startsWith('_') && key !== 'source_evidence' && key !== 'extraction_metadata')
-    .filter(key => left[key] != null || right[key] != null);
+    .filter(key =>
+      !key.startsWith('_')
+      && key !== 'source_evidence'
+      && key !== 'extraction_metadata'
+      && (left[key] != null || right[key] != null));
   if (!keys.length) return 0;
   const equal = keys.filter(key =>
     JSON.stringify(left[key] ?? null) === JSON.stringify(right[key] ?? null)).length;
@@ -155,7 +159,7 @@ const matchArrayEntries = (before: any[], after: any[], prefix: string): Array<n
   matches.forEach((match, afterIndex) => {
     if (match != null) return;
     const candidates = before
-      .map((item, beforeIndex) => {
+      .flatMap((item, beforeIndex) => {
         const similarity = arrayEntrySimilarity(item, after[afterIndex]);
         const identityOverlap = hasMeaningfulIdentityOverlap(
           item,
@@ -166,15 +170,15 @@ const matchArrayEntries = (before: any[], after: any[], prefix: string): Array<n
         // confidence, every normalized field except one is unchanged, so the
         // entry remains safely identifiable even when its array index moved.
         const highConfidenceMatch = similarity >= 0.8;
-        return {
+        const candidate = {
           beforeIndex,
           identityOverlap,
           score: used.has(beforeIndex) || (!identityOverlap && !highConfidenceMatch)
             ? 0
             : similarity,
         };
+        return candidate.score >= 0.6 ? [candidate] : [];
       })
-      .filter(candidate => candidate.score >= 0.6)
       .sort((left, right) =>
         right.score - left.score
         || Number(right.identityOverlap) - Number(left.identityOverlap)
@@ -208,9 +212,10 @@ const changedFactPaths = (before: any, after: any, prefix = ''): string[] => {
     });
   }
   if (before && after && typeof before === 'object' && typeof after === 'object') {
-    return Array.from(new Set([...Object.keys(before), ...Object.keys(after)]))
-      .filter(key => !key.startsWith('_') && key !== 'source_evidence' && key !== 'extraction_metadata')
-      .flatMap(key => changedFactPaths(before[key], after[key], prefix ? `${prefix}.${key}` : key));
+    return Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).flatMap((key) =>
+      !key.startsWith('_') && key !== 'source_evidence' && key !== 'extraction_metadata'
+        ? changedFactPaths(before[key], after[key], prefix ? `${prefix}.${key}` : key)
+        : []);
   }
   return prefix ? [prefix] : ['*'];
 };
@@ -284,11 +289,10 @@ const escapeXml = (value: unknown): string =>
     .replace(/>/g, '&gt;');
 
 const computeYears = (experience: any[]): number | undefined => {
-  const starts = experience
-    .map((item) => String(item?.start_date || ''))
-    .map((value) => value.match(/^(\d{4})/)?.[1])
-    .filter(Boolean)
-    .map(Number);
+  const starts = experience.flatMap((item) => {
+    const year = String(item?.start_date || '').match(/^(\d{4})/)?.[1];
+    return year ? [Number(year)] : [];
+  });
   if (!starts.length) return undefined;
   return Math.max(0, new Date().getFullYear() - Math.min(...starts));
 };
@@ -711,18 +715,24 @@ export class KnowledgeOrchestrator {
       const pending = this.db.getNodesNeedingReembed(activeSpace, 50, this.ownerScope);
       if (!pending.length) return;
       let successes = 0;
-      for (const node of pending) {
-        try {
-          const result = this.embedWithMetadataFn
-            ? await this.embedWithMetadataFn(node.text_content)
-            : { embedding: await this.embedFn!(node.text_content), space: activeSpace };
-          if (!result.embedding?.length || result.space !== activeSpace) continue;
-          this.db.updateNodeEmbedding(node.id, result.embedding, result.space);
-          successes++;
-        } catch {
-          // Keep the node eligible for a later startup/retry sweep.
+      const concurrency = Math.min(6, pending.length);
+      let nextIndex = 0;
+      const worker = async () => {
+        while (nextIndex < pending.length) {
+          const node = pending[nextIndex++];
+          try {
+            const result = this.embedWithMetadataFn
+              ? await this.embedWithMetadataFn(node.text_content)
+              : { embedding: await this.embedFn!(node.text_content), space: activeSpace };
+            if (!result.embedding?.length || result.space !== activeSpace) continue;
+            this.db.updateNodeEmbedding(node.id, result.embedding, result.space);
+            successes++;
+          } catch {
+            // Keep the node eligible for a later startup/retry sweep.
+          }
         }
-      }
+      };
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
       if (successes === 0 || pending.length < 50) return;
     }
   }
@@ -1159,9 +1169,10 @@ export class KnowledgeOrchestrator {
       const topExp = (resume.experience || [])[0];
       const summary = String(resume.identity?.summary || '').trim();
       const skills = flattenSkills(resume.skills).slice(0, 8);
-      const achievements = normalizeArray(resume.achievements).slice(0, 2)
-        .map(item => typeof item === 'string' ? item : item?.description || item?.title || '')
-        .filter(Boolean);
+      const achievements = normalizeArray(resume.achievements).slice(0, 2).flatMap((item) => {
+        const value = typeof item === 'string' ? item : item?.description || item?.title || '';
+        return value ? [value] : [];
+      });
       // Detect the requested profile categories rather than enumerating a few
       // exact sentences. This covers natural variants such as "full name",
       // "may I know your name", and "what should I call you", while the

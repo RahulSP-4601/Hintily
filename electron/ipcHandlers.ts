@@ -2348,7 +2348,10 @@ export function initializeIpcHandlers(appState: AppState): void {
               const t0 = Date.now();
               const memories = await ltm.recallRelevantMemory(message, { userId: _HM.getInstance().localUserId() }, { timeoutMs: 800, maxResults: 5 });
               const recallMs = Date.now() - t0;
-              const facts = memories.map((m) => m?.text?.trim()).filter(Boolean) as string[];
+              const facts = memories.flatMap((memory) => {
+                const fact = memory?.text?.trim();
+                return fact ? [fact] : [];
+              });
               if (facts.length > 0) {
                 // CONTEXT OS (Phase 10, 2026-07-10): when the turn contract
                 // exists, render the PROVENANCE-TAGGED memory block (per-fact
@@ -3234,8 +3237,16 @@ export function initializeIpcHandlers(appState: AppState): void {
               const resumeC = (orchC as any)?.activeResume?.structured_data ?? null;
               const profileTokens = resumeC ? {
                 firstName: (resumeC.identity?.name || resumeC.name || '').trim().split(/\s+/)[0] || undefined,
-                projects: (resumeC.projects || []).map((p: any) => (p?.name || '').split(/[–—-]/)[0].trim()).filter((s: string) => s.length >= 3),
-                companies: (resumeC.experience || []).map((e: any) => (e?.company || '').trim()).filter((s: string) => s.length >= 3),
+                projects: (resumeC.projects || []).reduce((names: string[], p: any) => {
+                  const name = (p?.name || '').split(/[–—-]/)[0].trim();
+                  if (name.length >= 3) names.push(name);
+                  return names;
+                }, []),
+                companies: (resumeC.experience || []).reduce((names: string[], e: any) => {
+                  const name = (e?.company || '').trim();
+                  if (name.length >= 3) names.push(name);
+                  return names;
+                }, []),
               } : undefined;
               const profileExplicitlyInvited = /\b(use|using|with|in|from)\s+(my|your|the)\s+(natively|project|portfolio)\b|\bin natively\b|\b(my|your) natively project\b/i.test(message);
               const codeLeak = validateProfileOutput({
@@ -3487,7 +3498,11 @@ export function initializeIpcHandlers(appState: AppState): void {
                 const orchD = llmHelper.getKnowledgeOrchestrator?.();
                 const resumeD = (orchD as any)?.activeResume?.structured_data ?? null;
                 availableProjects = resumeD
-                  ? (resumeD.projects || []).map((p: any) => (p?.name || '').split(/[–—-]/)[0].trim()).filter((s: string) => s.length >= 3)
+                  ? (resumeD.projects || []).reduce((names: string[], p: any) => {
+                    const name = (p?.name || '').split(/[–—-]/)[0].trim();
+                    if (name.length >= 3) names.push(name);
+                    return names;
+                  }, [])
                   : undefined;
               } catch { /* projects optional */ }
               const verdict = _manualDiversityGuard.check(fullResponse, answerPlan.answerType, message, { availableProjects });
@@ -3801,9 +3816,8 @@ export function initializeIpcHandlers(appState: AppState): void {
                 const saysNotMentioned = isAssistantRefusal(trimmed);
                 if (saysNotMentioned && docContextBlock && falseRefusalRepairEnabled) {
                   const qTerms: string[] = (message.match(/\b[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]\b/g) || [])
-                    .filter((t: string) => t.length >= 3 && t.length <= 40)
-                    // strip common English stop-words and question words
-                    .filter((t: string) => !/^(?:the|this|that|what|when|where|who|how|why|which|does|did|was|were|are|is|in|of|at|to|for|with|about|and|or|not|has|have|had|its|can|could|would|should|will|from|than|more|any|all|some|tell|explain|describe|me|my|your|their|it|be|do|an|on|by|as|up|if|so|but|out|no|we|they|he|she|you|his|her|our|us|them)$/i.test(t));
+                    .filter((t: string) => t.length >= 3 && t.length <= 40
+                      && !/^(?:the|this|that|what|when|where|who|how|why|which|does|did|was|were|are|is|in|of|at|to|for|with|about|and|or|not|has|have|had|its|can|could|would|should|will|from|than|more|any|all|some|tell|explain|describe|me|my|your|their|it|be|do|an|on|by|as|up|if|so|but|out|no|we|they|he|she|you|his|her|our|us|them)$/i.test(t));
                   const chunkLower = docContextBlock.toLowerCase();
                   const present = qTerms.filter((t: string) => chunkLower.includes(t.toLowerCase()));
                   const messageLower = message.toLowerCase();
@@ -3832,7 +3846,11 @@ export function initializeIpcHandlers(appState: AppState): void {
                   // "research" and is correctly left as an honest refusal.
                   const wholeNameHit = present.some((t: string) => packWholeNames.has(t.toLowerCase()))
                     || highSignalEntities.some((e) => packWholeNames.has(e.toLowerCase()));
-                  const tokenHits = new Set(present.filter((t: string) => packNameTokens.has(t.toLowerCase())).map((t: string) => t.toLowerCase()));
+                  const tokenHits = present.reduce<Set<string>>((hits, token) => {
+                    const normalized = token.toLowerCase();
+                    if (packNameTokens.has(normalized)) hits.add(normalized);
+                    return hits;
+                  }, new Set<string>());
                   const hasEntityEvidence = wholeNameHit || tokenHits.size >= 2;
                   const hasRealEvidence = hasEntityEvidence;
                   // isTier1Or2Evidence: EvidenceAssembler.computeTier's
@@ -4389,8 +4407,8 @@ export function initializeIpcHandlers(appState: AppState): void {
                       if (!capturedEvidenceBlock.trim()) return [];
                       const snippets = parseModeSnippets(capturedEvidenceBlock);
                       const texts = snippets.length > 0 ? snippets.map((s) => s.text) : [capturedEvidenceBlock];
-                      return texts.filter((t) => t && t.trim()).map((text, i) => ({
-                        evidenceId: `${_tc.turnId}:ev:${i}`,
+                      return texts.flatMap((text, index) => text && text.trim() ? [{
+                        evidenceId: `${_tc.turnId}:ev:${index}`,
                         sourceKind: 'mode_reference_chunk' as const,
                         sourceId: _tc.activeModeId ?? 'active-mode',
                         sourceOwner: 'reference_files' as const,
@@ -4400,7 +4418,7 @@ export function initializeIpcHandlers(appState: AppState): void {
                         supports: { property: _tc.requestedProperty },
                         score: { final: 0.6 },
                         reasonIncluded: 'captured generation evidence',
-                      }));
+                      }] : []);
                     })();
                     return {
                       packId: `${_tc.turnId}:verifypack:1`,
@@ -5699,7 +5717,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       const resp = await fetch(`${baseURL}/models`, { method: 'GET', headers, signal: AbortSignal.timeout(5000) });
       if (!resp.ok) return [];
       const data: any = await resp.json();
-      const models = (data?.data || []).map((m: any) => m?.id).filter(Boolean);
+      const models = (data?.data || []).flatMap((model: any) => model?.id ? [model.id] : []);
       return models;
     } catch {
       return [];
@@ -8166,7 +8184,7 @@ export function initializeIpcHandlers(appState: AppState): void {
           ...(Array.isArray(mem.decisions) ? mem.decisions : []),
           ...(Array.isArray(mem.questionsAsked) ? mem.questionsAsked : []),
           ...(Array.isArray(mem.skillsDiscussed) ? mem.skillsDiscussed : []),
-        ].filter(Boolean).map((s: any) => String(s));
+        ].flatMap((value: any) => value ? [String(value)] : []);
         const hay = haystackParts.join(' • ').toLowerCase();
         if (!hay) continue;
         let hits = 0;
@@ -8411,11 +8429,11 @@ export function initializeIpcHandlers(appState: AppState): void {
     const execFileAsync = promisify(execFile);
 
     const services = ['Microphone', 'ScreenCapture']; // Capital letters REQUIRED.
-    const results: Array<{ service: string; ok: boolean; output: string }> = [];
+    type TccResetResult = { service: string; ok: boolean; output: string };
 
     // These commands both mutate macOS's shared TCC database, so they must
     // remain sequential even though the individual services are distinct.
-    for (const service of services) {
+    const resetService = async (service: string): Promise<TccResetResult> => {
       try {
         // Absolute path — defense-in-depth against PATH shadowing. tccutil is
         // a SIP-protected stock macOS binary at /usr/bin/tccutil; using the
@@ -8425,13 +8443,22 @@ export function initializeIpcHandlers(appState: AppState): void {
           timeout: 5000,
         });
         console.log(`[IPC] tccutil reset ${service} ${bundleId}: OK`);
-        results.push({ service, ok: true, output: (stdout || stderr || '').toString().trim() });
+        return { service, ok: true, output: (stdout || stderr || '').toString().trim() };
       } catch (err: any) {
         const msg = err?.stderr?.toString?.() || err?.message || String(err);
         console.warn(`[IPC] tccutil reset ${service} ${bundleId} failed: ${msg}`);
-        results.push({ service, ok: false, output: msg.trim() });
+        return { service, ok: false, output: msg.trim() };
       }
-    }
+    };
+    const resetServicesSequentially = async (
+      index = 0,
+      results: TccResetResult[] = [],
+    ): Promise<TccResetResult[]> => {
+      if (index >= services.length) return results;
+      results.push(await resetService(services[index]));
+      return resetServicesSequentially(index + 1, results);
+    };
+    const results = await resetServicesSequentially();
 
     const anyOk = results.some((r) => r.ok);
     return {
@@ -8442,8 +8469,7 @@ export function initializeIpcHandlers(appState: AppState): void {
       message: anyOk
         ? 'Permissions reset. Quit Natively completely (Cmd+Q) and reopen — macOS will ask you to grant Microphone and Screen Recording again. Approve both to restore audio capture.'
         : `Permission reset failed for ${bundleId}. ${results
-            .filter((r) => !r.ok)
-            .map((r) => `${r.service}: ${r.output}`)
+            .flatMap((result) => result.ok ? [] : [`${result.service}: ${result.output}`])
             .join('; ')}`,
     };
   });
@@ -9242,12 +9268,15 @@ export function initializeIpcHandlers(appState: AppState): void {
       const event = events?.find((e: any) => e.id === eventId);
 
       if (event && event.attendees) {
-        return event.attendees
-          .map((a: any) => ({
-            email: a.email,
-            name: a.displayName || a.email?.split('@')[0] || '',
-          }))
-          .filter((a: any) => a.email);
+        return event.attendees.reduce((attendees: Array<{ email: string; name: string }>, attendee: any) => {
+          if (attendee.email) {
+            attendees.push({
+              email: attendee.email,
+              name: attendee.displayName || attendee.email.split('@')[0] || '',
+            });
+          }
+          return attendees;
+        }, []);
       }
 
       return [];
@@ -11748,12 +11777,13 @@ export function initializeIpcHandlers(appState: AppState): void {
         const files = mm.getReferenceFiles(modeId);
         const km = KnowledgeManager.getInstance();
         const out: any[] = [];
+        const normalizedTitles = titles ? new Set(titles) : undefined;
         for (const f of files) {
           const pack = km.getPackForFile(f.id);
           if (!pack) continue;
           for (const c of pack.cards) {
             const matchesGrep = grep ? c.body.toLowerCase().includes(grep.toLowerCase()) : false;
-            const matchesTitle = titles ? titles.includes(c.title.toLowerCase()) : false;
+            const matchesTitle = normalizedTitles ? normalizedTitles.has(c.title.toLowerCase()) : false;
             const matches = grep || titles ? (matchesGrep || matchesTitle) : true;
             out.push({ title: c.title, type: c.type, confidence: c.confidence, entities: c.entities, tags: c.tags, sourceSections: c.sourceSections, bodyLen: c.body.length, matchesGrep: matches, body: matches ? c.body : undefined });
           }
@@ -11918,7 +11948,8 @@ export function initializeIpcHandlers(appState: AppState): void {
           if (kdb && typeof kdb.getAllNodes === 'function') {
             const nodes = kdb.getAllNodes(ownerScope) || [];
             nodeCount = nodes.length;
-            embeddingSpaces = [...new Set(nodes.map((n: any) => n.embedding_space).filter(Boolean))] as string[];
+            embeddingSpaces = [...new Set(nodes.flatMap((node: any) =>
+              node.embedding_space ? [node.embedding_space] : []))] as string[];
           }
         } catch { /* best effort */ }
         const aot = {

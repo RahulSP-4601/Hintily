@@ -387,8 +387,9 @@ export class ProviderRouter {
         reason: string,
         health: Record<string, ProviderHealthStatus>
     ): ProviderChoice | null {
+        const availableProviders = new Set(available);
         for (const provider of preference) {
-            if (available.includes(provider) && health[provider] !== 'down') {
+            if (availableProviders.has(provider) && health[provider] !== 'down') {
                 return {
                     provider,
                     model: this.getDefaultModel(provider),

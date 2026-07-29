@@ -182,13 +182,18 @@ function cardsFromDrafts(
 
 function entitiesFromCards(cards: KnowledgeCard[], packId: string, nowIso: string): KnowledgeEntity[] {
   const byName = new Map<string, KnowledgeEntity>();
+  const sourceIdsByName = new Map<string, Set<string>>();
   for (const card of cards) {
     for (const name of card.entities) {
       const key = name.toLowerCase();
       if (!key) continue;
       const existing = byName.get(key);
       if (existing) {
-        if (!existing.sourceCardIds.includes(card.id)) existing.sourceCardIds.push(card.id);
+        const sourceIds = sourceIdsByName.get(key)!;
+        if (!sourceIds.has(card.id)) {
+          existing.sourceCardIds.push(card.id);
+          sourceIds.add(card.id);
+        }
       } else {
         byName.set(key, {
           id: shortId('pent', `${packId}:${key}`),
@@ -202,6 +207,7 @@ function entitiesFromCards(cards: KnowledgeCard[], packId: string, nowIso: strin
           sourcePages: [],
           firstSeenAt: nowIso,
         });
+        sourceIdsByName.set(key, new Set([card.id]));
       }
     }
   }

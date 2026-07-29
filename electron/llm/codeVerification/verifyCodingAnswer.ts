@@ -55,10 +55,11 @@ const emptyVerdict = (skipReason: NonNullable<Verdict['skipReason']>, language?:
 const executeAll = async (
   language: VerifyLanguage, code: string, entry: string, cases: TestCase[], run: RunCaseFn, hints?: StructHints,
 ): Promise<Verdict> => {
-  const results: RunResult[] = [];
-  for (const tc of cases) {
-    results.push(await run(language, code, entry, tc, hints));
-  }
+  // Test cases are isolated subprocess executions, so they can run together
+  // without changing ordering or sharing mutable state.
+  const results = await Promise.all(
+    cases.map((tc) => run(language, code, entry, tc, hints)),
+  );
   const firstFailure = results.find(r => r.status !== 'pass');
   const passedCount = results.filter(r => r.status === 'pass').length;
   return {
@@ -291,7 +292,10 @@ export const verifyCodingAnswer = async (opts: VerifyCodingOptions): Promise<Ver
 // public method name in the code. Returns '' when nothing is confidently found.
 const guessEntry = (code: string, language: VerifyLanguage): string => {
   if (language === 'python') {
-    const defs = [...code.matchAll(/^\s*def\s+([A-Za-z_]\w*)\s*\(/gm)].map(m => m[1]).filter(n => n !== '__init__');
+    const defs = Array.from(
+      code.matchAll(/^\s*def\s+([A-Za-z_]\w*)\s*\(/gm),
+      (match) => match[1],
+    ).filter((name) => name !== '__init__');
     // Prefer a non-dunder method/function; the LAST top-levelish def is often the solver.
     return defs.find(n => !n.startsWith('_')) || defs[0] || '';
   }

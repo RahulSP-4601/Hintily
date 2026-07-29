@@ -57,8 +57,9 @@ function computeTier(params: {
 
   const topScore = cards.length > 0 ? Math.max(...cards.map((c) => c.score)) : 0;
   const targetEntities = classification.targetEntities.map((e) => e.toLowerCase());
+  const targetEntitySet = new Set(targetEntities);
   const hasTargetEntityInCards = targetEntities.length > 0 && cards.some(
-    (c) => c.card.entities.some((e) => targetEntities.includes(e.toLowerCase()))
+    (c) => c.card.entities.some((e) => targetEntitySet.has(e.toLowerCase()))
       || targetEntities.some((e) => c.card.title.toLowerCase().includes(e)),
   );
 
