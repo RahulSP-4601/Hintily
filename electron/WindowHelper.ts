@@ -316,16 +316,16 @@ export class WindowHelper {
         if (mode === 'none') {
           if (isMac) {
             return app.isPackaged
-              ? path.join(process.resourcesPath, 'natively.icns')
-              : path.resolve(__dirname, '../../assets/natively.icns');
+              ? path.join(process.resourcesPath, 'hintily-icon.png')
+              : path.resolve(__dirname, '../../assets/hintily-icon.png');
           } else if (isWin) {
             return app.isPackaged
-              ? path.join(process.resourcesPath, 'assets/icons/win/icon.ico')
-              : path.resolve(__dirname, '../../assets/icons/win/icon.ico');
+              ? path.join(process.resourcesPath, 'assets/icons/hintily/win/hintily.ico')
+              : path.resolve(__dirname, '../../assets/icons/hintily/win/hintily.ico');
           } else {
             return app.isPackaged
-              ? path.join(process.resourcesPath, 'icon.png')
-              : path.resolve(__dirname, '../../assets/icon.png');
+              ? path.join(process.resourcesPath, 'hintily-icon.png')
+              : path.resolve(__dirname, '../../assets/hintily-icon.png');
           }
         }
 
@@ -340,16 +340,16 @@ export class WindowHelper {
           // Defensive: unknown mode — use the real app icon, matching 'none'.
           if (isMac) {
             return app.isPackaged
-              ? path.join(process.resourcesPath, 'natively.icns')
-              : path.resolve(__dirname, '../../assets/natively.icns');
+              ? path.join(process.resourcesPath, 'hintily-icon.png')
+              : path.resolve(__dirname, '../../assets/hintily-icon.png');
           } else if (isWin) {
             return app.isPackaged
-              ? path.join(process.resourcesPath, 'assets/icons/win/icon.ico')
-              : path.resolve(__dirname, '../../assets/icons/win/icon.ico');
+              ? path.join(process.resourcesPath, 'assets/icons/hintily/win/hintily.ico')
+              : path.resolve(__dirname, '../../assets/icons/hintily/win/hintily.ico');
           }
           return app.isPackaged
-            ? path.join(process.resourcesPath, 'icon.png')
-            : path.resolve(__dirname, '../../assets/icon.png');
+            ? path.join(process.resourcesPath, 'hintily-icon.png')
+            : path.resolve(__dirname, '../../assets/hintily-icon.png');
         }
 
         const platformDir = isWin ? 'win' : 'mac';

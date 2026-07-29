@@ -218,6 +218,7 @@ export function initializeIpcHandlers(appState: AppState): void {
 
   const hintilyAuth = HintilyAuthService.getInstance();
   const hintilyBusiness = HintilyBusinessService.getInstance();
+  const hintilyManagedSession = HintilyManagedSession.getInstance();
   let activeHintilySurface: HintilySessionSurface | null = null;
   let hintilyMeetingCleanup: Promise<void> | null = null;
   const resolveHintilySurface = (metadata?: unknown): HintilySessionSurface => {
@@ -237,12 +238,19 @@ export function initializeIpcHandlers(appState: AppState): void {
     const pending = hintilyMeetingCleanup;
     if (pending) await pending;
   };
-  const beginHintilyMeetingCleanup = (): Promise<void> => {
+  const beginHintilyMeetingCleanup = (
+    sessionStatus: 'completed' | 'interrupted' | 'exhausted' | 'failed' = 'completed',
+  ): Promise<void> => {
     if (hintilyMeetingCleanup) return hintilyMeetingCleanup;
-    const managedSession = HintilyManagedSession.getInstance();
+    const managedSession = hintilyManagedSession;
     const cleanup = (async (): Promise<void> => {
       let teardownFailed = false;
       try {
+        const intelligence = appState.getIntelligenceManager();
+        const metadata = intelligence.getMeetingMetadata();
+        if (metadata && typeof metadata === 'object') {
+          intelligence.setMeetingMetadata({ ...metadata, sessionStatus });
+        }
         await appState.endMeeting();
         // Title/summary generation is part of the just-ended meeting and must
         // use that same authorized session. Keep it until all post-meeting AI
@@ -253,6 +261,8 @@ export function initializeIpcHandlers(appState: AppState): void {
         throw error;
       } finally {
         activeHintilySurface = null;
+        const { ModesManager } = require('./services/ModesManager');
+        ModesManager.getInstance().setLauncherSessionContext(null);
         await managedSession.stop(teardownFailed ? 'meeting_stop_failed' : undefined);
       }
     })();
@@ -264,6 +274,24 @@ export function initializeIpcHandlers(appState: AppState): void {
     }).catch((): void => undefined);
     return cleanup;
   };
+  hintilyManagedSession.on('exhausted', () => {
+    if (!appState.getIsMeetingActive()) return;
+    void beginHintilyMeetingCleanup('exhausted')
+      .catch(error => console.error('[Hintily] Exhausted-session cleanup failed:', error))
+      .finally(() => appState.getWindowHelper().setWindowMode('launcher'));
+  });
+  hintilyManagedSession.on('session-error', () => {
+    if (!appState.getIsMeetingActive()) return;
+    void beginHintilyMeetingCleanup('failed')
+      .catch(error => console.error('[Hintily] Failed-session cleanup failed:', error))
+      .finally(() => appState.getWindowHelper().setWindowMode('launcher'));
+  });
+  hintilyManagedSession.on('terminate', () => {
+    if (!appState.getIsMeetingActive()) return;
+    void beginHintilyMeetingCleanup('interrupted')
+      .catch(error => console.error('[Hintily] Interrupted-session cleanup failed:', error))
+      .finally(() => appState.getWindowHelper().setWindowMode('launcher'));
+  });
   const accountScopedAbortControllers = new Set<AbortController>();
   const accountScopedCancellers = new Set<() => void>();
   const cancelAccountScopedWork = (): void => {
@@ -318,15 +346,21 @@ export function initializeIpcHandlers(appState: AppState): void {
   safeHandle('hintily-auth:sign-out', () =>
     afterHintilyAuthReady(async () => {
       cancelAccountScopedWork();
-      await HintilyManagedSession.getInstance().stopForAuthChange('signed_out')
-        .catch((): void => undefined);
+      if (appState.getIsMeetingActive()) {
+        await beginHintilyMeetingCleanup('interrupted').catch((): void => undefined);
+      } else {
+        await hintilyManagedSession.stopForAuthChange('signed_out').catch((): void => undefined);
+      }
       return hintilyAuth.signOut();
     }));
   safeHandle('hintily-auth:delete-account', () =>
     afterHintilyAuthReady(async () => {
       cancelAccountScopedWork();
-      await HintilyManagedSession.getInstance().stopForAuthChange('account_deleted')
-        .catch((): void => undefined);
+      if (appState.getIsMeetingActive()) {
+        await beginHintilyMeetingCleanup('interrupted').catch((): void => undefined);
+      } else {
+        await hintilyManagedSession.stopForAuthChange('account_deleted').catch((): void => undefined);
+      }
       return hintilyAuth.deleteAccount();
     }));
   safeHandle('hintily-business:ensure-trial', () =>
@@ -7863,22 +7897,119 @@ export function initializeIpcHandlers(appState: AppState): void {
       // managed-session completion RPC. Authorizing before this barrier can
       // reuse the old session, which the prior end handler then stops.
       await waitForHintilyMeetingCleanup();
-      const surface = resolveHintilySurface(metadata);
-      activeHintilySurface = surface;
-      if (CredentialsManager.getInstance().getSttProvider() === 'hintily') {
-        const managedSession = HintilyManagedSession.getInstance();
-        // A failed prior completion deliberately keeps its session id so the
-        // backend can still be reconciled. Retry that completion instead of
-        // treating the stale id as authorization for this new meeting.
-        if (!appState.getIsMeetingActive() && managedSession.authorizedSessionId) {
-          await managedSession.stop('stale_meeting_cleanup');
-        }
-        await managedSession.authorize(surface);
+      if (appState.getIsMeetingActive()) {
+        appState.getWindowHelper().setWindowMode('overlay');
+        return { success: true, resumed: true };
       }
-      await appState.startMeeting(metadata);
+      const surface = resolveHintilySurface(metadata);
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+        throw new Error('launcher_setup_required');
+      }
+      const request = metadata as Record<string, any>;
+      const modeId = typeof request.modeId === 'string' ? request.modeId.trim() : '';
+      if (!modeId) throw new Error('mode_required');
+      const { ModesManager } = require('./services/ModesManager');
+      const modesManager = ModesManager.getInstance();
+      const selectedMode = modesManager.getModes().find((mode: any) => mode.id === modeId);
+      if (!selectedMode) throw new Error('mode_not_found');
+      const modeSurface = selectedMode.templateType === 'technical-interview'
+        || selectedMode.templateType === 'looking-for-work'
+        || String(selectedMode.templateType).toLowerCase().includes('interview')
+        ? 'interview_helper'
+        : 'meeting';
+      if (modeSurface !== surface) throw new Error('mode_surface_mismatch');
+
+      const cleanMetadataText = (value: unknown, max: number): string | undefined => {
+        if (typeof value !== 'string') return undefined;
+        const normalized = value.replace(/\u0000/g, '').trim();
+        return normalized ? normalized.slice(0, max) : undefined;
+      };
+      const title = cleanMetadataText(request.title, 200);
+      const company = cleanMetadataText(request.company, 160);
+      const role = cleanMetadataText(request.role, 160);
+      if (!title) throw new Error('session_title_required');
+      if (surface === 'interview_helper' && (!company || !role)) {
+        throw new Error('interview_company_and_role_required');
+      }
+      if (surface === 'interview_helper') {
+        await syncProfileOwner();
+        const profileStatus = appState.getKnowledgeOrchestrator()?.getStatus();
+        if (!profileStatus?.hasResume) throw new Error('resume_required');
+        if (selectedMode.templateType === 'technical-interview' && !profileStatus.hasJD) {
+          throw new Error('job_description_required');
+        }
+      }
+      const inputDeviceId = cleanMetadataText(request.audio?.inputDeviceId, 512);
+      const outputDeviceId = cleanMetadataText(request.audio?.outputDeviceId, 512);
+      if (!inputDeviceId || !outputDeviceId) throw new Error('audio_devices_required');
+      const inputExists = AudioDevices.getInputDevices().some(device => device.id === inputDeviceId);
+      const outputExists = AudioDevices.getOutputDevices().some(device => device.id === outputDeviceId);
+      if (!inputExists || !outputExists) throw new Error('audio_device_disconnected');
+
+      let calendarEvent: any = null;
+      const requestedEventId = cleanMetadataText(request.calendarEvent?.id, 512);
+      if (surface === 'meeting' && requestedEventId) {
+        const { CalendarManager } = require('./services/CalendarManager');
+        const events = await CalendarManager.getInstance().getUpcomingEvents();
+        calendarEvent = (Array.isArray(events) ? events : []).find((item: any) => item.id === requestedEventId) || null;
+        if (!calendarEvent) throw new Error('calendar_event_unavailable');
+      }
+      const validatedMetadata = {
+        surface,
+        modeId: selectedMode.id,
+        modeTemplateType: selectedMode.templateType,
+        title,
+        company,
+        role,
+        context: cleanMetadataText(request.context, 4_000),
+        participants: surface === 'meeting'
+          ? cleanMetadataText(request.participants, 2_000)
+          : undefined,
+        calendarEventId: calendarEvent?.id,
+        source: calendarEvent ? 'calendar' : 'manual',
+        audio: { inputDeviceId, outputDeviceId },
+        doNotPersist: request.doNotPersist === true,
+      };
+      modesManager.setActiveMode(selectedMode.id);
+      modesManager.setLauncherSessionContext({
+        modeId: selectedMode.id,
+        title,
+        company,
+        role,
+        context: validatedMetadata.context,
+        participants: validatedMetadata.participants,
+      });
+      activeHintilySurface = surface;
+      const credentials = CredentialsManager.getInstance();
+      if (credentials.getSttProvider() !== 'hintily') {
+        const persisted = credentials.setSttProvider('hintily');
+        if (!persisted) throw new Error('managed_stt_configuration_failed');
+        await appState.reconfigureSttProvider();
+      }
+      const managedSession = HintilyManagedSession.getInstance();
+      // A failed prior completion deliberately keeps its session id so the
+      // backend can still be reconciled. Retry that completion instead of
+      // treating the stale id as authorization for this new meeting.
+      if (!appState.getIsMeetingActive() && managedSession.authorizedSessionId) {
+        await managedSession.stop('stale_meeting_cleanup');
+      }
+      await managedSession.authorize(surface);
+      await appState.startMeeting(validatedMetadata);
+      // startMeeting initializes audio asynchronously. Do not expose a
+      // successful start or swap to the overlay until managed AI and both
+      // Deepgram channels have activated this exact authorized session.
+      await managedSession.waitUntilActivated();
+      appState.getWindowHelper().setWindowMode('overlay');
+      appState.publishMeetingStarted();
       return { success: true };
     } catch (error: any) {
       activeHintilySurface = null;
+      const { ModesManager } = require('./services/ModesManager');
+      ModesManager.getInstance().setLauncherSessionContext(null);
+      if (appState.getIsMeetingActive()) {
+        await beginHintilyMeetingCleanup('failed').catch((): void => undefined);
+        appState.getWindowHelper().setWindowMode('launcher');
+      }
       await HintilyManagedSession.getInstance().stop('meeting_start_failed').catch((): void => undefined);
       console.error('Error starting meeting:', error);
       // Forward the structured error code (e.g. 'mic-permission-denied') so the
@@ -7895,6 +8026,32 @@ export function initializeIpcHandlers(appState: AppState): void {
     } catch (error: any) {
       console.error('Error ending meeting:', error);
       return { success: false, error: error.message };
+    }
+  });
+
+  safeHandle('hintily-session:get-runtime-status', () =>
+    hintilyManagedSession.getRuntimeStatus());
+
+  safeHandle('hintily-session:end-active', async () => {
+    try {
+      if (appState.getIsMeetingActive()) {
+        await beginHintilyMeetingCleanup('completed');
+      } else {
+        const account = await hintilyBusiness.getAccountState();
+        if (!account.ok) return account;
+        const active = account.data.active_session;
+        if (active) {
+          const completed = await hintilyBusiness.completeSession(
+            active.id,
+            'ended_from_launcher',
+            hintilyBusiness.captureAccessToken() || undefined,
+          );
+          if (!completed.ok) return completed;
+        }
+      }
+      return await hintilyBusiness.getAccountState();
+    } catch (error: any) {
+      return { ok: false, error: error?.message || 'session_completion_failed' };
     }
   });
 
@@ -9659,6 +9816,54 @@ export function initializeIpcHandlers(appState: AppState): void {
     }
   });
 
+  safeHandle('profile:upload-jd-text', async (_, rawText: unknown) => {
+    const maxJdTextLength = 100_000;
+    let temporaryDirectory: string | null = null;
+    try {
+      if (!await hasHintilyFeatureAccess()) {
+        return { success: false, error: 'An available Hintily session or unlimited plan is required.' };
+      }
+      if (typeof rawText !== 'string') {
+        return { success: false, error: 'Job-description text must be a string.' };
+      }
+      const text = rawText.replace(/\u0000/g, '').trim();
+      if (text.length < 50) {
+        return { success: false, error: 'Job-description text must contain at least 50 characters.' };
+      }
+      if (text.length > maxJdTextLength) {
+        return { success: false, error: `Job-description text exceeds ${maxJdTextLength} characters.` };
+      }
+      await syncProfileOwner();
+      const orchestrator = appState.getKnowledgeOrchestrator();
+      if (!orchestrator) {
+        return { success: false, error: 'Knowledge engine not initialized. Please retry after AI startup.' };
+      }
+      temporaryDirectory = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'hintily-jd-'));
+      const temporaryFile = path.join(temporaryDirectory, 'job-description.txt');
+      await fs.promises.writeFile(temporaryFile, text, {
+        encoding: 'utf8',
+        flag: 'wx',
+        mode: 0o600,
+      });
+      const { DocType } = require('../premium/electron/knowledge/types');
+      const result = await orchestrator.ingestDocument(temporaryFile, DocType.JD);
+      if (result?.success) {
+        orchestrator.setKnowledgeMode(true);
+        const { SettingsManager } = require('./services/SettingsManager');
+        SettingsManager.getInstance().set('knowledgeMode', true);
+      }
+      return result;
+    } catch (error: any) {
+      console.error('[IPC] profile:upload-jd-text error:', error);
+      return { success: false, error: error?.message || 'Job-description processing failed.' };
+    } finally {
+      if (temporaryDirectory) {
+        await fs.promises.rm(temporaryDirectory, { recursive: true, force: true })
+          .catch((): void => undefined);
+      }
+    }
+  });
+
   safeHandle('profile:delete-jd', async () => {
     try {
       await syncProfileOwner();
@@ -10045,6 +10250,21 @@ export function initializeIpcHandlers(appState: AppState): void {
       }));
     } catch (e: any) {
       console.error('[IPC] modes:get-all error:', e);
+      return [];
+    }
+  });
+
+  safeHandle('modes:ensure-launcher-defaults', async () => {
+    try {
+      if (!await hasHintilyFeatureAccess()) return [];
+      const { ModesManager } = require('./services/ModesManager');
+      const manager = ModesManager.getInstance();
+      return manager.ensureLauncherModes().map((mode: any) => ({
+        ...mode,
+        referenceFileCount: manager.getReferenceFiles(mode.id).length,
+      }));
+    } catch (error: any) {
+      console.error('[IPC] modes:ensure-launcher-defaults error:', error);
       return [];
     }
   });

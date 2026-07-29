@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useT } from '../i18n';
 import { ToggleLeft, ToggleRight, Search, Calendar, ArrowRight, ArrowLeft, MoreHorizontal, Globe, Clock, ChevronRight, Settings, LayoutGrid, RefreshCw, Eye, EyeOff, Ghost, Plus, Mail, Link as LinkIcon, ChevronDown, Trash2, Bell, Check, Download, DownloadCloud, CheckCircle, AlertCircle, User, UserSearch, Sparkles, ArrowUpRight } from 'lucide-react';
 import { generateMeetingPDF } from '../utils/pdfGenerator';
-import icon from "./icon.png";
+import icon from "./hintily-icon.png";
 import mainui from "../UI_comp/mainui.png";
 import calender from "../UI_comp/calender.png";
 import ConnectCalendarButton from './ui/ConnectCalendarButton';
@@ -17,6 +17,12 @@ import { useResolvedTheme } from '../hooks/useResolvedTheme';
 import { isMac } from '../utils/platformUtils';
 import WindowControls from './WindowControls';
 import { emitOrchestratorEvent, setUserState as setOrchestratorUserState } from './onboarding/OrchestratedToasterHost';
+import {
+    LauncherSessionSetup,
+    type HintilyLauncherSurface,
+} from './hintily/LauncherSessionSetup';
+import { useHintilyAccount } from '../lib/hintily/HintilyAccountContext';
+import type { HintilyLauncherStartRequest } from '../lib/hintily/launcherSession';
 
 interface Meeting {
     id: string;
@@ -27,6 +33,15 @@ interface Meeting {
     detailedSummary?: {
         actionItems: string[];
         keyPoints: string[];
+        hintilySession?: {
+            surface: 'interview_helper' | 'meeting';
+            company?: string;
+            role?: string;
+            modeId?: string;
+            modeName?: string;
+            modeTemplateType?: string;
+            status: 'completed' | 'interrupted' | 'exhausted' | 'failed';
+        };
     };
     transcript?: Array<{
         speaker: string;
@@ -42,10 +57,16 @@ interface Meeting {
     }>;
     active?: boolean; // UI state
     time?: string; // Optional for compatibility
+    isProcessed?: boolean;
+    summaryStatus?: 'queued' | 'assembling' | 'generating' | 'validating' | 'completed' | 'failed';
 }
 
 interface LauncherProps {
-    onStartMeeting: () => void;
+    onStartMeeting: (request: HintilyLauncherStartRequest) => Promise<{
+        success: boolean;
+        error?: string;
+        code?: string;
+    }>;
     onOpenSettings: (tab?: string) => void;
     onOpenProfile?: () => void;
     onOpenModes?: () => void;
@@ -54,6 +75,19 @@ interface LauncherProps {
     ollamaPullPercent?: number;
     ollamaPullMessage?: string;
 }
+
+const SESSION_SURFACE_KEY = 'hintily.launcher.surface.v1';
+
+const loadSessionSurface = (): HintilyLauncherSurface => {
+    try {
+        const stored = window.localStorage.getItem(SESSION_SURFACE_KEY);
+        return stored === 'meeting' || stored === 'interview_helper'
+            ? stored
+            : 'interview_helper';
+    } catch {
+        return 'interview_helper';
+    }
+};
 
 // Helper to format date groups
 const getGroupLabel = (dateStr: string) => {
@@ -82,6 +116,12 @@ const formatTime = (dateStr: string) => {
 
 const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onOpenProfile, onOpenModes, onPageChange, ollamaPullStatus = 'idle', ollamaPullPercent = 0, ollamaPullMessage = '' }) => {
     const t = useT();
+    const {
+        status: hintilyAuthStatus,
+        account: hintilyAccount,
+        accountLoading: hintilyAccountLoading,
+        hasAccess: hasHintilyAccess,
+    } = useHintilyAccount();
     const [meetings, setMeetings] = useState<Meeting[]>([]);
     const [isDetectable, setIsDetectable] = useState(false);
     const [isMeetingActive, setIsMeetingActive] = useState(false);
@@ -90,6 +130,7 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     const [isCalendarConnected, setIsCalendarConnected] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [showNotification, setShowNotification] = useState(false);
+    const [sessionSurface, setSessionSurface] = useState<HintilyLauncherSurface>(loadSessionSurface);
 
     // Global search state (for AI chat overlay)
     const [isGlobalChatOpen, setIsGlobalChatOpen] = useState(false);
@@ -101,6 +142,37 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
     // StrictMode-safe guard for mount-only side-effects: the dev build
     // intentionally double-invokes effects to surface this class of bug.
     const mountedOnceRef = useRef<boolean>(false);
+
+    const signedInToHintily = hintilyAuthStatus.state === 'signed_in';
+    const canStartHintilySession = signedInToHintily
+        && !hintilyAccountLoading
+        && hasHintilyAccess;
+
+    useEffect(() => {
+        const activeSurface = hintilyAccount?.active_session?.surface;
+        if (activeSurface === 'meeting' || activeSurface === 'interview_helper') {
+            setSessionSurface(activeSurface);
+        }
+    }, [hintilyAccount?.active_session?.surface]);
+
+    const handleSurfaceChange = (next: HintilyLauncherSurface): void => {
+        const activeSurface = hintilyAccount?.active_session?.surface;
+        if (hintilyAccount?.active_session
+            && (activeSurface ? activeSurface !== next : sessionSurface !== next)) return;
+        setSessionSurface(next);
+        try {
+            window.localStorage.setItem(SESSION_SURFACE_KEY, next);
+        } catch {
+            // The in-memory choice remains valid when renderer storage is unavailable.
+        }
+    };
+
+    const focusSessionSetup = (): void => {
+        document.getElementById('hintily-launcher-session-setup')?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center',
+        });
+    };
 
     const fetchMeetings = () => {
         if (window.electronAPI && window.electronAPI.getRecentMeetings) {
@@ -868,11 +940,20 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                     window.electronAPI?.setWindowMode?.('overlay', true);
                                                     analytics.trackCommandExecuted('resume_meeting_from_launcher');
                                                 } else {
-                                                    emitOrchestratorEvent({ type: 'turn:done', surface: 'meeting' });
-                                                    onStartMeeting();
-                                                    analytics.trackCommandExecuted('start_natively_cta');
+                                                    if (!canStartHintilySession) {
+                                                        focusSessionSetup();
+                                                        return;
+                                                    }
+                                                    focusSessionSetup();
+                                                    analytics.trackCommandExecuted('open_hintily_session_setup');
                                                 }
                                             }}
+                                            aria-disabled={!isMeetingActive && !canStartHintilySession}
+                                            title={!isMeetingActive && !canStartHintilySession
+                                                ? signedInToHintily
+                                                    ? 'Verify or purchase Hintily access below'
+                                                    : 'Sign in with Google below to start'
+                                                : undefined}
                                             className="group relative overflow-hidden text-white px-6 py-3 rounded-full font-celeb font-medium tracking-normal flex items-center justify-center gap-3 backdrop-blur-xl shrink-0 transition-transform duration-200 ease-out active:scale-[0.98] hover:scale-[1.01] hover:brightness-110"
                                             style={{
                                                 boxShadow: isMeetingActive
@@ -936,7 +1017,11 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                                 src={icon} alt="Logo" className="w-[18px] h-[18px] object-contain brightness-0 invert drop-shadow-[0_1px_2px_rgba(0,0,0,0.1)] opacity-90"
                                                             />
                                                             <span className="drop-shadow-[0_1px_1px_rgba(0,0,0,0.1)] text-[20px] leading-none">
-                                                                {t('Start Hintily')}
+                                                                {!signedInToHintily
+                                                                    ? t('Sign in to start')
+                                                                    : sessionSurface === 'interview_helper'
+                                                                        ? t('Start Interview Helper')
+                                                                        : t('Start Meeting')}
                                                             </span>
                                                         </motion.div>
                                                     )}
@@ -1139,6 +1224,15 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                 <section className="px-8 py-8 min-h-full">
                                     <div className="max-w-4xl mx-auto space-y-8">
 
+                                        <div id="hintily-launcher-session-setup" className="scroll-mt-6">
+                                            <LauncherSessionSetup
+                                                surface={sessionSurface}
+                                                localSessionActive={isMeetingActive}
+                                                onSurfaceChange={handleSurfaceChange}
+                                                onStart={onStartMeeting}
+                                            />
+                                        </div>
+
                                         {/* Iterating Date Groups */}
                                         {sortedGroups.map((label) => (
                                             <section key={label}>
@@ -1151,8 +1245,32 @@ const Launcher: React.FC<LauncherProps> = ({ onStartMeeting, onOpenSettings, onO
                                                             className="group relative flex items-center justify-between px-3 py-2 rounded-lg bg-transparent hover:bg-bg-elevated transition-colors"
                                                             onClick={() => handleOpenMeeting(m)}
                                                         >
-                                                            <div className={`font-medium text-[14px] max-w-[60%] truncate ${m.title === 'Processing...' ? 'text-blue-400 italic animate-pulse' : 'text-text-primary'}`}>
+                                                            <div className="min-w-0 max-w-[60%]">
+                                                              <div className={`truncate font-medium text-[14px] ${m.title === 'Processing...' ? 'text-blue-400 italic animate-pulse' : 'text-text-primary'}`}>
                                                                 {m.title}
+                                                              </div>
+                                                              {(() => {
+                                                                const metadata = m.detailedSummary?.hintilySession;
+                                                                const surface = metadata?.surface === 'interview_helper'
+                                                                  ? 'Interview Helper'
+                                                                  : metadata?.surface === 'meeting'
+                                                                    ? 'Meeting'
+                                                                    : 'Legacy session';
+                                                                const context = metadata?.surface === 'interview_helper'
+                                                                  ? [metadata.company, metadata.role].filter(Boolean).join(' · ')
+                                                                  : '';
+                                                                const mode = metadata?.modeName || metadata?.modeTemplateType;
+                                                                const status = metadata?.status
+                                                                  || (m.summaryStatus ? `summary ${m.summaryStatus}` : 'status unavailable');
+                                                                return (
+                                                                  <div className="mt-0.5 truncate text-[10px] text-text-tertiary">
+                                                                    {surface}
+                                                                    {context ? ` · ${context}` : ''}
+                                                                    {mode ? ` · ${mode}` : ''}
+                                                                    {` · ${status}`}
+                                                                  </div>
+                                                                );
+                                                              })()}
                                                             </div>
 
                                                             {/* Time & Duration Section */}

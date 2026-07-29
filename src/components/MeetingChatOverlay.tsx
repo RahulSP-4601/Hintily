@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { genMessageId } from '../utils/messageId';
 import { mapLanguageForPrism, isBlockCode } from '../utils/prismLanguage';
 import { registerPrismLanguages } from '../utils/registerPrismLanguages';
-import nativelyIcon from './icon.png';
+import nativelyIcon from './hintily-icon.png';
 import { useResolvedTheme } from '../hooks/useResolvedTheme';
 
 import ReactMarkdown from 'react-markdown';

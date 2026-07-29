@@ -13,6 +13,15 @@ interface DomCaptureMeta {
   firstLine?: string;
 }
 
+interface HintilyManagedRuntimeStatus {
+  sessionId: string | null;
+  surface: 'interview_helper' | 'meeting' | null;
+  phase: 'idle' | 'authorizing' | 'connecting' | 'active' | 'stopping';
+  aiReady: boolean;
+  interviewerReady: boolean;
+  userReady: boolean;
+}
+
 // Types for the exposed Electron API
 interface ElectronAPI {
   hintilyAuthGetStatus: () => Promise<HintilyAuthStatus>;
@@ -27,6 +36,8 @@ interface ElectronAPI {
   hintilyBusinessHeartbeat: (input: { sessionId: string; sequenceNo: number; activeSeconds: number }) => Promise<any>;
   hintilyBusinessCompleteSession: (input: { sessionId: string; failureCode?: string }) => Promise<any>;
   hintilyBusinessCreateCheckout: (productCode: string) => Promise<any>;
+  hintilySessionGetRuntimeStatus: () => Promise<HintilyManagedRuntimeStatus>;
+  hintilySessionEndActive: () => Promise<any>;
   onHintilyCheckoutReturn: (callback: (payload: { outcome: 'success' | 'cancel' }) => void) => () => void;
   onHintilyTimeWarning: (callback: (payload: { remainingSeconds: number }) => void) => () => void;
   onHintilyAuthChanged: (callback: (status: HintilyAuthStatus) => void) => () => void;
@@ -791,6 +802,7 @@ interface ElectronAPI {
 
   // JD & Research API
   profileUploadJD: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+  profileUploadJDText: (text: string) => Promise<{ success: boolean; error?: string }>;
   profileDeleteJD: () => Promise<{ success: boolean; error?: string }>;
   // OKF Profile Intelligence (2026-07-02).
   knowledgeExportProfilePack: () => Promise<{ success: boolean; path?: string; fileCount?: number; error?: string; violations?: Array<{ path: string; reason: string }> }>;
@@ -923,6 +935,7 @@ interface ElectronAPI {
       referenceFileCount: number;
     }>
   >;
+  modesEnsureLauncherDefaults: () => ReturnType<ElectronAPI['modesGetAll']>;
   modesGetActive: () => Promise<{
     id: string;
     name: string;
@@ -1117,6 +1130,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('hintily-business:complete-session', input),
   hintilyBusinessCreateCheckout: (productCode: string) =>
     ipcRenderer.invoke('hintily-business:create-checkout', productCode),
+  hintilySessionGetRuntimeStatus: () =>
+    ipcRenderer.invoke('hintily-session:get-runtime-status'),
+  hintilySessionEndActive: () =>
+    ipcRenderer.invoke('hintily-session:end-active'),
   onHintilyCheckoutReturn: (callback: (payload: { outcome: 'success' | 'cancel' }) => void) => {
     hintilyCheckoutReturnSubscribers.add(callback);
     if (pendingHintilyCheckoutReturn) {
@@ -2417,6 +2434,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // JD & Research API
   profileUploadJD: (filePath: string) => ipcRenderer.invoke('profile:upload-jd', filePath),
+  profileUploadJDText: (text: string) => ipcRenderer.invoke('profile:upload-jd-text', text),
   profileDeleteJD: () => ipcRenderer.invoke('profile:delete-jd'),
   // OKF Profile Intelligence (2026-07-02): export the profile OKF bundle (explicit
   // user action, premium + okfProfileMarkdownExport gated) and read pack data for
@@ -2575,6 +2593,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Modes API
   modesGetAll: () => ipcRenderer.invoke('modes:get-all'),
+  modesEnsureLauncherDefaults: () => ipcRenderer.invoke('modes:ensure-launcher-defaults'),
   modesGetActive: () => ipcRenderer.invoke('modes:get-active'),
   modesCreate: (params: { name: string; templateType: string }) =>
     ipcRenderer.invoke('modes:create', params),

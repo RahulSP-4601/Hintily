@@ -15,6 +15,15 @@ type ActivationReadiness = {
   reject: (error: Error) => void;
 };
 
+export type HintilyManagedRuntimeStatus = {
+  sessionId: string | null;
+  surface: 'interview_helper' | 'meeting' | null;
+  phase: 'idle' | 'authorizing' | 'connecting' | 'active' | 'stopping';
+  aiReady: boolean;
+  interviewerReady: boolean;
+  userReady: boolean;
+};
+
 export class HintilyManagedSession extends EventEmitter {
   private static instance: HintilyManagedSession | null = null;
   private readonly business = HintilyBusinessService.getInstance();
@@ -54,6 +63,26 @@ export class HintilyManagedSession extends EventEmitter {
 
   get authorizedPostProcessingSessionId(): string | null {
     return this.postProcessingSessionId;
+  }
+
+  getRuntimeStatus(): HintilyManagedRuntimeStatus {
+    const phase = this.stopping
+      ? 'stopping'
+      : this.authorizing
+        ? 'authorizing'
+        : this.activated
+          ? 'active'
+          : this.sessionId
+            ? 'connecting'
+            : 'idle';
+    return {
+      sessionId: this.sessionId,
+      surface: this.surface,
+      phase,
+      aiReady: this.aiProviderReady,
+      interviewerReady: this.readyChannels.has('interviewer'),
+      userReady: this.readyChannels.has('user'),
+    };
   }
 
   private beginActivationReadiness(generation: number): void {
@@ -443,7 +472,7 @@ export class HintilyManagedSession extends EventEmitter {
     const remaining = payload.remaining_seconds;
     const accepted = payload.accepted_seconds || 0;
     if (remaining != null &&
-      [300, 120, 60].some(limit =>
+      [600, 300, 60].some(limit =>
         remaining <= limit && remaining + accepted > limit)) {
       this.emit('warning', { remainingSeconds: remaining });
     }

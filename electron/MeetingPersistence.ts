@@ -146,13 +146,18 @@ export class MeetingPersistence {
         const seconds = ((durationMs % 60000) / 1000).toFixed(0);
         const durationStr = `${minutes}:${Number(seconds) < 10 ? '0' : ''}${seconds}`;
 
+        const hintilySessionMetadata = buildHintilySessionMetadata(metadataSnapshot, modeSnapshot);
         const placeholder: Meeting = {
             id: meetingId,
             title: "Processing...",
             date: new Date().toISOString(),
             duration: durationStr,
             summary: "Generating summary...",
-            detailedSummary: { actionItems: [], keyPoints: [] },
+            detailedSummary: {
+                actionItems: [],
+                keyPoints: [],
+                ...(hintilySessionMetadata ? { hintilySession: hintilySessionMetadata } : {}),
+            },
             transcript: snapshot.transcript,
             usage: snapshot.usage,
             ownerAccountId: snapshot.ownerAccountId,
@@ -200,7 +205,17 @@ export class MeetingPersistence {
         },
         meetingId: string,
         // BUG-04 fix: accept metadata snapshot so calendar info is not lost after session.reset()
-        metadata?: { title?: string; calendarEventId?: string; source?: 'manual' | 'calendar' } | null,
+        metadata?: {
+            title?: string;
+            calendarEventId?: string;
+            source?: 'manual' | 'calendar';
+            surface?: 'interview_helper' | 'meeting';
+            company?: string;
+            role?: string;
+            modeId?: string;
+            modeTemplateType?: string;
+            sessionStatus?: 'completed' | 'interrupted' | 'exhausted' | 'failed';
+        } | null,
         // BUG-MODE-BLEEDING fix: accept mode snapshot so async summary uses the mode that was
         // active when meeting stopped, not whatever mode is active when async processing runs.
         modeSnapshot?: { id: string; name: string; templateType: string } | null,
@@ -621,6 +636,10 @@ Return ONLY valid JSON (no markdown code blocks):
             const minutes = Math.floor(data.durationMs / 60000);
             const seconds = ((data.durationMs % 60000) / 1000).toFixed(0);
             const durationStr = `${minutes}:${Number(seconds) < 10 ? '0' : ''}${seconds}`;
+            const hintilySessionMetadata = buildHintilySessionMetadata(metadata, modeSnapshot);
+            if (hintilySessionMetadata) {
+                summaryData = { ...summaryData, hintilySession: hintilySessionMetadata };
+            }
 
             const meetingData: Meeting = {
                 id: meetingId,
@@ -993,6 +1012,34 @@ Return ONLY valid JSON (no markdown code blocks):
             return false;
         }
     }
+}
+
+function buildHintilySessionMetadata(
+    metadata?: {
+        title?: string;
+        calendarEventId?: string;
+        source?: 'manual' | 'calendar';
+        surface?: 'interview_helper' | 'meeting';
+        company?: string;
+        role?: string;
+        modeId?: string;
+        modeTemplateType?: string;
+        sessionStatus?: 'completed' | 'interrupted' | 'exhausted' | 'failed';
+    } | null,
+    mode?: { id: string; name: string; templateType: string } | null,
+): NonNullable<Meeting['detailedSummary']>['hintilySession'] | null {
+    if (metadata?.surface !== 'interview_helper' && metadata?.surface !== 'meeting') return null;
+    return {
+        surface: metadata.surface,
+        ...(metadata.company ? { company: metadata.company } : {}),
+        ...(metadata.role ? { role: metadata.role } : {}),
+        ...(metadata.modeId || mode?.id ? { modeId: metadata.modeId || mode?.id } : {}),
+        ...(mode?.name ? { modeName: mode.name } : {}),
+        ...(metadata.modeTemplateType || mode?.templateType
+            ? { modeTemplateType: metadata.modeTemplateType || mode?.templateType }
+            : {}),
+        status: metadata.sessionStatus || 'completed',
+    };
 }
 
 // Build the persisted detailedSummary blob from a MeetingSummaryV3, preserving back-compat

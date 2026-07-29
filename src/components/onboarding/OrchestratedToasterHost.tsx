@@ -20,7 +20,10 @@ import { BrowserExtensionToaster } from './BrowserExtensionToaster';
 import { TrialPromoToaster } from '../trial/TrialPromoToaster';
 import { SupportToaster } from '../SupportToaster';
 import ReviewPromptHost from '../ReviewPromptHost';
-import { LEGACY_NATIVELY_COMMERCE_ENABLED } from '../../config/brand';
+import {
+  HINTILY_BROWSER_EXTENSION_ENABLED,
+  LEGACY_NATIVELY_COMMERCE_ENABLED,
+} from '../../config/brand';
 
 // ─── Event channel ────────────────────────────────────────────────
 
@@ -77,6 +80,9 @@ export const OrchestratedToasterHost: React.FC = () => {
   const onSkip = (id: ToasterId) => () => orch.markSkipped(id);
 
   useEffect(() => {
+    if (!HINTILY_BROWSER_EXTENSION_ENABLED && activeId === 'browser_extension') {
+      orch.markSkipped('browser_extension');
+    }
     if (!LEGACY_NATIVELY_COMMERCE_ENABLED && activeId === 'trial_promo') {
       orch.markSkipped('trial_promo');
     }
@@ -121,6 +127,7 @@ export const OrchestratedToasterHost: React.FC = () => {
       );
 
     case 'browser_extension':
+      if (!HINTILY_BROWSER_EXTENSION_ENABLED) return null;
       return <BrowserExtensionToaster isOpen={true} onDismiss={onDismiss('browser_extension')} onSkip={onSkip('browser_extension')} />;
 
     case 'profile_intelligence':

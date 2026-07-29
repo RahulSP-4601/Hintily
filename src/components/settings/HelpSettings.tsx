@@ -10,9 +10,12 @@ import { SiOpenai, SiGoogle } from 'react-icons/si';
 import { useShortcuts } from '../../hooks/useShortcuts';
 import { useResolvedTheme } from '../../hooks/useResolvedTheme';
 import { isMac, getModifierSymbol } from '../../utils/platformUtils';
-import nativelyIcon from '../icon.png';
+import nativelyIcon from '../hintily-icon.png';
 import zoomCaptureModeScreenshot from '../../assets/zoom-capture-mode.png';
-import { LEGACY_PROVIDER_CONFIGURATION_ENABLED } from '../../config/brand';
+import {
+    HINTILY_BROWSER_EXTENSION_ENABLED,
+    LEGACY_PROVIDER_CONFIGURATION_ENABLED,
+} from '../../config/brand';
 
 // ----------------------
 // Animations & Mocks
@@ -2009,6 +2012,7 @@ hindsight-api`}
                     </div>
                 </AccordionSection>
 
+                {HINTILY_BROWSER_EXTENSION_ENABLED && (
                 <AccordionSection title="14. Companion Browser Extension Setup" icon={<Smartphone className="w-4 h-4" />}>
                     <div className="space-y-4">
                         <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl mb-4">
@@ -2084,6 +2088,7 @@ hindsight-api`}
                         </div>
                     </div>
                 </AccordionSection>
+                )}
 
                 <AccordionSection title="15. Session Memory & Spoken Humanizer" icon={<Sparkles className="w-4 h-4" />}>
                     <div className="space-y-4">

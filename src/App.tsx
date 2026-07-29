@@ -5,6 +5,7 @@ import NativelyInterface from "./components/NativelyInterface"
 import HindsightStatusBanner from "./components/HindsightStatusBanner"
 import SettingsPopup from "./components/SettingsPopup" // Keeping for legacy/specific window support if needed
 import Launcher from "./components/Launcher"
+import type { HintilyLauncherStartRequest } from "./lib/hintily/launcherSession"
 import ModelSelectorWindow from "./components/ModelSelectorWindow"
 import SettingsOverlay from "./components/SettingsOverlay"
 import StartupSequence from "./components/StartupSequence"
@@ -13,7 +14,10 @@ import UpdateBanner from "./components/UpdateBanner"
 import { NativelyQuotaBanner } from "./components/NativelyQuotaBanner"
 import { FreeTrialBanner }      from "./components/trial/FreeTrialBanner"
 import { FreeTrialModal }       from "./components/trial/FreeTrialModal"
-import { LEGACY_NATIVELY_COMMERCE_ENABLED } from "./config/brand"
+import {
+  HINTILY_BROWSER_EXTENSION_ENABLED,
+  LEGACY_NATIVELY_COMMERCE_ENABLED,
+} from "./config/brand"
 import { OrchestratorProvider, OrchestratedToasterHost, setUserState as setOrchestratorUserState, emitOrchestratorEvent } from "./components/onboarding/OrchestratedToasterHost"
 import ReviewPromptHost from "./components/ReviewPromptHost"
 // NOTE: explicit `.ts` extension is load-bearing. Vite's default resolver
@@ -48,6 +52,7 @@ import { analytics } from "./lib/analytics/analytics.service"
 import { ErrorBoundary } from "./components/ErrorBoundary"
 import ModesSettings from "./components/settings/ModesSettings"
 import { ProfileIntelligenceSettings } from "./components/ProfileIntelligenceSettings"
+import { HintilyAccountProvider } from "./lib/hintily/HintilyAccountContext"
 
 
 // DEV-ONLY: should the launcher mount an uncontrolled ReviewPromptHost?
@@ -614,7 +619,7 @@ const App: React.FC = () => {
               macTCCBlocked,
               seenModesOnboarding: seenModes,
               seenProfileOnboarding: seenProfile,
-              extensionSupported: true, // updated by phoneMirrorGetInfo below
+              extensionSupported: HINTILY_BROWSER_EXTENSION_ENABLED,
             });
           })
           .catch(() => {
@@ -633,7 +638,7 @@ const App: React.FC = () => {
       window.electronAPI?.phoneMirrorGetInfo?.()
         .then(info => setOrchestratorUserState({
           extensionConnected: info?.extensionConnected ?? false,
-          extensionSupported: true,
+          extensionSupported: HINTILY_BROWSER_EXTENSION_ENABLED,
           isV2_8_OrNewer: true, // min version handled inside the stage skipWhen
         }))
         .catch(() => {});
@@ -769,11 +774,17 @@ const App: React.FC = () => {
     }
   };
 
-  const handleStartMeeting = async () => {
+  const handleStartMeeting = async (
+    request: HintilyLauncherStartRequest,
+  ): Promise<{ success: boolean; error?: string; code?: string }> => {
     try {
+      const metadata = request;
+      const requestedAudio = metadata.audio;
       localStorage.setItem('natively_last_meeting_start', Date.now().toString());
-      const inputDeviceId = localStorage.getItem('preferredInputDeviceId');
-      let outputDeviceId = localStorage.getItem('preferredOutputDeviceId');
+      const inputDeviceId = requestedAudio?.inputDeviceId
+        || localStorage.getItem('preferredInputDeviceId');
+      let outputDeviceId = requestedAudio?.outputDeviceId
+        || localStorage.getItem('preferredOutputDeviceId');
       // SCK is a macOS-only backend (ScreenCaptureKit + CoreAudio Process Tap
       // live in the Rust speaker module under #[cfg(target_os = "macos")]).
       // F-003 hid the toggle UI on Windows, but the localStorage key can be
@@ -794,6 +805,7 @@ const App: React.FC = () => {
 
       const meetingRetention = await window.electronAPI.getMeetingRetention?.().catch(() => 'forever');
       const result = await window.electronAPI.startMeeting({
+        ...metadata,
         audio: { inputDeviceId, outputDeviceId },
         doNotPersist: meetingRetention === 'never'
       });
@@ -816,6 +828,7 @@ const App: React.FC = () => {
           setOrchestratorUserState({ macTCCBlocked: true });
         }
       }
+      return result;
     } catch (err) {
       console.error("Failed to start meeting:", err);
       // Defense-in-depth: today the start-meeting IPC handler catches and
@@ -826,6 +839,11 @@ const App: React.FC = () => {
       if ((err as { code?: string })?.code === 'mic-permission-denied') {
         setOrchestratorUserState({ macTCCBlocked: true });
       }
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : 'Unable to start Hintily.',
+        code: (err as { code?: string })?.code,
+      };
     }
   };
 
@@ -962,6 +980,7 @@ const App: React.FC = () => {
             }}
           >
             <QueryClientProvider client={queryClient}>
+              <HintilyAccountProvider>
               <ToastProvider>
                 <div id="launcher-container" className="h-full w-full relative">
                   <Launcher
@@ -1045,6 +1064,7 @@ const App: React.FC = () => {
                 </AnimatePresence>
                 <ToastViewport />
               </ToastProvider>
+              </HintilyAccountProvider>
             </QueryClientProvider>
           </motion.div>
         )}

@@ -1917,6 +1917,16 @@ export class AppState {
     return this.isMeetingActive;
   }
 
+  /**
+   * Publish the live state only after the managed AI and both Deepgram
+   * channels have activated. Internal capture startup still uses
+   * isMeetingActive, but the launcher must not expose Resume prematurely.
+   */
+  public publishMeetingStarted(): void {
+    if (!this.isMeetingActive) return;
+    this.broadcastMeetingState();
+  }
+
   public isQuitting(): boolean {
     return this._isQuitting;
   }
@@ -5119,18 +5129,8 @@ export class AppState {
     // the reset bounds.)
     this.windowHelper.resetOverlayPosition();
 
-    // ─── WINDOW SWAP BEFORE STATE BROADCAST ───────────────────────────────
-    // Switch to the overlay BEFORE flipping `isMeetingActive` to true. If we
-    // broadcast meeting-state-changed:{isActive:true} while the launcher is
-    // still visible, the launcher's CTA pill briefly crossfades blue→green
-    // before the renderer's follow-up setWindowMode('overlay') hides it —
-    // visible as a flash. Switching first means the launcher hides before
-    // the state event arrives, so the user only ever sees the overlay.
-    this.windowHelper.setWindowMode('overlay');
-
     const meetingGeneration = ++this._meetingGeneration;
     this.isMeetingActive = true;
-    this.broadcastMeetingState()
     if (metadata) {
       this.intelligenceManager.setMeetingMetadata(metadata);
     }
@@ -6259,10 +6259,10 @@ export class AppState {
     const resourcesPath = app.isPackaged ? process.resourcesPath : app.getAppPath();
 
     // Potential paths for tray icon
-    const templatePath = path.join(resourcesPath, 'assets', 'iconTemplate.png');
+    const templatePath = path.join(resourcesPath, 'assets', 'hintily-iconTemplate.png');
     const defaultIconPath = app.isPackaged
-      ? path.join(resourcesPath, 'src/components/icon.png')
-      : path.join(app.getAppPath(), 'src/components/icon.png');
+      ? path.join(resourcesPath, 'src/components/hintily-icon.png')
+      : path.join(app.getAppPath(), 'src/components/hintily-icon.png');
 
     let iconToUse = defaultIconPath;
 
@@ -6783,16 +6783,16 @@ export class AppState {
         appName = "Hintily";
         if (isMac) {
           iconPath = app.isPackaged
-            ? path.join(process.resourcesPath, "hintily.icns")
-            : path.join(app.getAppPath(), "assets/natively.icns");
+            ? path.join(process.resourcesPath, "hintily-icon.png")
+            : path.join(app.getAppPath(), "assets/hintily-icon.png");
         } else if (isWin) {
           iconPath = app.isPackaged
-            ? path.join(process.resourcesPath, "assets/icons/win/icon.ico")
-            : path.join(app.getAppPath(), "assets/icons/win/icon.ico");
+            ? path.join(process.resourcesPath, "assets/icons/hintily/win/hintily.ico")
+            : path.join(app.getAppPath(), "assets/icons/hintily/win/hintily.ico");
         } else {
           iconPath = app.isPackaged
-            ? path.join(process.resourcesPath, "icon.png")
-            : path.join(app.getAppPath(), "assets/icon.png");
+            ? path.join(process.resourcesPath, "hintily-icon.png")
+            : path.join(app.getAppPath(), "assets/hintily-icon.png");
         }
         break;
     }
@@ -7636,12 +7636,10 @@ if (process.env.THINKING_MATRIX === '1') {
 
     calMgr.on('start-meeting-requested', (event: any) => {
       console.log('[Main] Start meeting requested from calendar notification', event);
+      // Calendar notifications may open the authenticated launcher, but they
+      // must never bypass Hintily setup, access verification, mode selection,
+      // or managed-provider readiness.
       appState.centerAndShowWindow();
-      appState.startMeeting({
-        title: event.title,
-        calendarEventId: event.id,
-        source: 'calendar'
-      });
     });
 
     calMgr.on('open-requested', () => {

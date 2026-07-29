@@ -44,6 +44,15 @@ export interface Meeting {
         speakerLabels?: SpeakerLabelMap;
         crossMeeting?: { carriedOpenQuestions?: Array<{ text: string; fromMeetingId: string; fromTitle: string }>; recurringRisks?: Array<{ text: string; fromMeetingId: string; fromTitle: string }>; stillOpen?: string[] };
         coachingInsights?: Array<{ id: string; type: string; title: string; detail: string; severity: 'info' | 'opportunity' | 'warning'; evidence?: string }>;
+        hintilySession?: {
+            surface: 'interview_helper' | 'meeting';
+            company?: string;
+            role?: string;
+            modeId?: string;
+            modeName?: string;
+            modeTemplateType?: string;
+            status: 'completed' | 'interrupted' | 'exhausted' | 'failed';
+        };
     };
     transcript?: Array<{
         speaker: string;

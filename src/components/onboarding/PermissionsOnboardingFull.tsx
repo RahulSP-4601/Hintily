@@ -12,7 +12,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { X, Monitor, Mic, Lightbulb, Check, AlertCircle, ArrowRight, Lock } from 'lucide-react';
 import { NativelyLogoMark } from '../NativelyLogoMark';
-import nativelyIcon from '../../../assets/icon.png';
+import nativelyIcon from '../../assets/hintily-logo.webp';
 
 const STORAGE_KEY  = 'natively_perms_shown_v1';
 

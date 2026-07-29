@@ -1,6 +1,6 @@
 import React from "react";
 import { motion } from "framer-motion";
-import nativelyLogo from "../assets/logo.webp";
+import nativelyLogo from "../assets/hintily-logo.webp";
 import { getModifierSymbol } from "../utils/platformUtils";
 
 const DARK_GLASS = {

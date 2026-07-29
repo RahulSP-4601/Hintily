@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { X, Monitor, Mic, Settings } from 'lucide-react';
-import nativelyIcon from '../../../assets/icon.png';
+import nativelyIcon from '../../assets/hintily-logo.webp';
 import { useResolvedTheme } from '../../hooks/useResolvedTheme';
 
 const STORAGE_KEY  = 'natively_perms_shown_v1';

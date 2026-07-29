@@ -330,6 +330,14 @@ function rowToSection(row: any): ModeNoteSection {
 export class ModesManager {
     private static instance: ModesManager;
     private readonly modeContextRetriever = new ModeContextRetriever();
+    private launcherSessionContext: {
+        modeId: string;
+        title: string;
+        company?: string;
+        role?: string;
+        context?: string;
+        participants?: string;
+    } | null = null;
     /** Normalized [0,1] top-score confidence from the most recent
      *  buildRetrievedActiveModeContextBlock call. Read by the doc-grounded
      *  false-refusal gate. See getLastRetrievalConfidence. */
@@ -342,6 +350,29 @@ export class ModesManager {
             ModesManager.instance = new ModesManager();
         }
         return ModesManager.instance;
+    }
+
+    public setLauncherSessionContext(context: {
+        modeId: string;
+        title: string;
+        company?: string;
+        role?: string;
+        context?: string;
+        participants?: string;
+    } | null): void {
+        this.launcherSessionContext = context ? { ...context } : null;
+    }
+
+    private getLauncherSessionContext(modeId: string): string {
+        const context = this.launcherSessionContext;
+        if (!context || context.modeId !== modeId) return '';
+        return [
+            `Session title: ${context.title}`,
+            context.company ? `Company: ${context.company}` : '',
+            context.role ? `Role: ${context.role}` : '',
+            context.context ? `User-provided context: ${context.context}` : '',
+            context.participants ? `Participants: ${context.participants}` : '',
+        ].filter(Boolean).join('\n');
     }
 
     // ── Modes ─────────────────────────────────────────────────────
@@ -380,6 +411,21 @@ export class ModesManager {
         if (!modes.some(m => m.templateType === 'general')) {
             this.createMode({ name: 'General', templateType: 'general' });
         }
+    }
+
+    /**
+     * Fill missing built-in launcher templates without replacing user modes.
+     * The local SQLite check and writes are synchronous, making repeated calls
+     * idempotent for the desktop process.
+     */
+    public ensureLauncherModes(): Mode[] {
+        const existingTemplates = new Set(this.getModes().map(mode => mode.templateType));
+        for (const template of MODE_TEMPLATES) {
+            if (existingTemplates.has(template.type)) continue;
+            this.createMode({ name: template.label, templateType: template.type });
+            existingTemplates.add(template.type);
+        }
+        return this.getModes();
     }
 
     public getActiveMode(): Mode | null {
@@ -1185,7 +1231,8 @@ export class ModesManager {
     public getActiveModePinnedInstructions(answerType?: AnswerType, pinnedModeId?: string): string {
         const mode = this.resolveMode(pinnedModeId);
         if (!mode) return '';
-        const raw = (mode.customContext || '').trim();
+        const launcherContext = this.getLauncherSessionContext(mode.id);
+        const raw = [launcherContext, mode.customContext?.trim()].filter(Boolean).join('\n\n');
         if (!raw) return '';
         const grounding = this.getActiveModeDocumentGroundingInfo(pinnedModeId);
         const scoped = (answerType && !grounding.documentGroundedCustomModeActive)
@@ -1536,6 +1583,10 @@ export class ModesManager {
         if (summaryCustom) {
             parts.push(`<active_mode_custom_instructions format="json">\n${encodeModeContextPayload({ content: summaryCustom })}\n</active_mode_custom_instructions>`);
         }
+        const launcherContext = this.getLauncherSessionContext(mode.id);
+        if (launcherContext) {
+            parts.push(`<launcher_session_context format="json">\n${encodeModeContextPayload({ content: launcherContext })}\n</launcher_session_context>`);
+        }
 
         const includeReferenceSnippets = options?.includeReferenceSnippets !== false;
         if (includeReferenceSnippets) {
@@ -1564,6 +1615,10 @@ export class ModesManager {
 
         if (mode.customContext.trim()) {
             parts.push(`<active_mode_custom_instructions format="json">\n${encodeModeContextPayload({ content: mode.customContext.trim() })}\n</active_mode_custom_instructions>`);
+        }
+        const launcherContext = this.getLauncherSessionContext(mode.id);
+        if (launcherContext) {
+            parts.push(`<launcher_session_context format="json">\n${encodeModeContextPayload({ content: launcherContext })}\n</launcher_session_context>`);
         }
 
         const files = this.getReferenceFiles(mode.id);

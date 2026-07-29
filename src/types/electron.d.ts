@@ -47,6 +47,8 @@ export interface ElectronAPI {
   hintilyBusinessHeartbeat: (input: { sessionId: string; sequenceNo: number; activeSeconds: number }) => Promise<HintilyBusinessResult<HintilyHeartbeatResult>>
   hintilyBusinessCompleteSession: (input: { sessionId: string; failureCode?: string }) => Promise<HintilyBusinessResult<HintilyAccountState>>
   hintilyBusinessCreateCheckout: (productCode: string) => Promise<HintilyBusinessResult<{ checkout_url: string; session_id: string | null }>>
+  hintilySessionGetRuntimeStatus: () => Promise<HintilyManagedRuntimeStatus>
+  hintilySessionEndActive: () => Promise<HintilyBusinessResult<HintilyAccountState>>
   onHintilyCheckoutReturn: (callback: (payload: { outcome: 'success' | 'cancel' }) => void) => () => void
   onHintilyTimeWarning: (callback: (payload: { remainingSeconds: number }) => void) => () => void
   onHintilyAuthChanged: (callback: (status: HintilyAuthStatus) => void) => () => void
@@ -303,6 +305,7 @@ export interface ElectronAPI {
 
   // Modes
   modesGetAll: () => Promise<Array<{ id: string; name: string; templateType: string; customContext: string; isActive: boolean; createdAt: string; referenceFileCount: number }>>
+  modesEnsureLauncherDefaults: () => ReturnType<ElectronAPI['modesGetAll']>
   modesGetActive: () => Promise<{ id: string; name: string; templateType: string; customContext: string; isActive: boolean; createdAt: string } | null>
   modesCreate: (params: { name: string; templateType: string }) => Promise<{ success: boolean; mode?: any; error?: string }>
   modesGenerateFromBrief: (params: { brief: string; requiresGrounding?: boolean; templateHint?: string; key?: string; persist?: boolean }) => Promise<{ success: boolean; mode?: any; draft?: any; attempts?: number; issues?: any[]; persisted?: boolean; error?: string }>
@@ -570,6 +573,7 @@ export interface ElectronAPI {
 
   // JD & Research API
   profileUploadJD: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  profileUploadJDText: (text: string) => Promise<{ success: boolean; error?: string }>
   profileDeleteJD: () => Promise<{ success: boolean; error?: string }>
   profileResearchCompany: (companyName: string) => Promise<{ success: boolean; dossier?: any; error?: string; searchQuotaExhausted?: boolean }>
   profileGenerateNegotiation: (force?: boolean) => Promise<{ success: boolean; script?: any; error?: string }>
@@ -765,6 +769,14 @@ export interface HintilyHeartbeatResult {
   duplicate: boolean
   remaining_seconds: number | null
   exhausted: boolean
+}
+export interface HintilyManagedRuntimeStatus {
+  sessionId: string | null
+  surface: 'interview_helper' | 'meeting' | null
+  phase: 'idle' | 'authorizing' | 'connecting' | 'active' | 'stopping'
+  aiReady: boolean
+  interviewerReady: boolean
+  userReady: boolean
 }
 export interface HintilyPurchaseSummary {
   id: string

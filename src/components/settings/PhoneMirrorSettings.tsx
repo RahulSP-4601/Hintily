@@ -4,6 +4,7 @@ import { useT } from '../../i18n';
 import type { BrowserContextSettings, PhoneMirrorInfo } from '../../types/electron';
 import { isMac } from '../../utils/platformUtils';
 import { BrowserExtensionIcon } from '../onboarding/BrowserExtensionIcon';
+import { HINTILY_BROWSER_EXTENSION_ENABLED } from '../../config/brand';
 
 const MiniPairingCountdownRing: React.FC<{ seconds: number; total: number }> = ({
   seconds,
@@ -290,7 +291,7 @@ export const PhoneMirrorSettings: React.FC = () => {
       <header>
         <h3 className="text-lg font-bold text-text-primary mb-1">{t('Sync')}</h3>
         <p className="text-xs text-text-secondary mb-5">
-          Mirror answers to your phone. Capture browser tabs to your answers.
+          Mirror answers to your phone.
         </p>
       </header>
 
@@ -483,10 +484,12 @@ export const PhoneMirrorSettings: React.FC = () => {
           )}
         </div>
 
-        <div className="h-px bg-border-subtle" />
+        {HINTILY_BROWSER_EXTENSION_ENABLED && (
+          <>
+            <div className="h-px bg-border-subtle" />
 
-        {/* Row 3 — Browser Extension (inline status + action, not a big card) */}
-        <div>
+            {/* Row 3 — Browser Extension (inline status + action, not a big card) */}
+            <div>
           <div className="flex items-start gap-3">
             <div className="rounded-lg bg-bg-main p-2 border border-border-subtle flex-shrink-0 mt-0.5">
               <BrowserExtensionIcon color="rgb(129, 140, 248)" size={16} className="text-indigo-400" />
@@ -606,7 +609,9 @@ export const PhoneMirrorSettings: React.FC = () => {
               <Lock size={11} /> Enable Phone Mirror first to pair the browser extension.
             </div>
           )}
-        </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* =====================================================================
@@ -615,6 +620,7 @@ export const PhoneMirrorSettings: React.FC = () => {
           <details>. Experimental toggle lives inside that disclosure with
           amber treatment, NOT as a peer card.
           ===================================================================== */}
+      {HINTILY_BROWSER_EXTENSION_ENABLED && (
       <div className="bg-bg-item-surface rounded-xl border border-border-subtle p-5 space-y-4">
         <div className="flex items-start gap-3">
           <div className="rounded-lg bg-bg-main p-2 border border-border-subtle flex-shrink-0">
@@ -702,19 +708,22 @@ export const PhoneMirrorSettings: React.FC = () => {
           </div>
         </details>
       </div>
+      )}
 
       {/* =====================================================================
           Group C — Quiet reassurance footer (NOT a big emerald card)
           Privacy floor line + local-network line. Muted, no gradients.
           ===================================================================== */}
       <footer className="space-y-1.5 text-text-secondary text-xs leading-relaxed">
-        <div className="flex items-start gap-2">
-          <Lock size={12} className="mt-0.5 flex-shrink-0 text-text-secondary" />
-          <span>
-            Email, chat, banking, and auth pages are never captured — even if they look like a
-            coding page.
-          </span>
-        </div>
+        {HINTILY_BROWSER_EXTENSION_ENABLED && (
+          <div className="flex items-start gap-2">
+            <Lock size={12} className="mt-0.5 flex-shrink-0 text-text-secondary" />
+            <span>
+              Email, chat, banking, and auth pages are never captured — even if they look like a
+              coding page.
+            </span>
+          </div>
+        )}
         <div className="flex items-start gap-2">
           <Wifi size={12} className="mt-0.5 flex-shrink-0 text-text-secondary" />
           <span>{t('Phone Mirror runs on your local network. No traffic leaves this machine.')}</span>

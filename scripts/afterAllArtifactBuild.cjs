@@ -41,7 +41,9 @@ const crypto = require('crypto');
 const packageJson = require('../package.json');
 const VOLNAME = packageJson.build?.productName || 'Hintily';
 const BACKGROUND = path.resolve(__dirname, '..', 'assets', 'dmg-background.png');
-const VOLICON = path.resolve(__dirname, '..', 'assets', 'natively.icns');
+// electron-builder derives the macOS app icon from the Hintily PNG. A custom
+// DMG volume icon is applied only when a dedicated Hintily ICNS is available.
+const VOLICON = path.resolve(__dirname, '..', 'assets', 'hintily.icns');
 
 function sha512base64(file) {
   return crypto.createHash('sha512').update(fs.readFileSync(file)).digest('base64');

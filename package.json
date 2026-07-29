@@ -151,8 +151,8 @@
         "to": "assets/"
       },
       {
-        "from": "assets/natively.icns",
-        "to": "hintily.icns"
+        "from": "assets/hintily-icon.png",
+        "to": "hintily-icon.png"
       },
       {
         "from": "build/hintily.public-config.json",
@@ -181,7 +181,7 @@
           ]
         }
       ],
-      "icon": "assets/natively.icns",
+      "icon": "assets/hintily.icns",
       "identity": null,
       "hardenedRuntime": false,
       "extendInfo": {
@@ -206,7 +206,7 @@
           ]
         }
       ],
-      "icon": "assets/icons/win/icon.ico",
+      "icon": "assets/icons/hintily/win/hintily.ico",
       "requestedExecutionLevel": "asInvoker"
     },
     "linux": {
@@ -224,7 +224,7 @@
           ]
         }
       ],
-      "icon": "assets/icons/png/",
+      "icon": "assets/icons/hintily/png/",
       "category": "Office"
     },
     "nsis": {

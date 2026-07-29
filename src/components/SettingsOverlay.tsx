@@ -19,7 +19,7 @@ import { SkillsSettings } from './settings/SkillsSettings';
 import { VisionModelBenchmark } from './settings/VisionModelBenchmark';
 import { HintilyAccountSettings } from './settings/HintilyAccountSettings';
 import { LocalWhisperModelPanel } from './LocalWhisperModelPanel';
-import nativelyLogo from '../assets/logo.webp';
+import nativelyLogo from '../assets/hintily-logo.webp';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useShortcuts } from '../hooks/useShortcuts';
 import { isMac } from '../utils/platformUtils';
@@ -34,7 +34,7 @@ import {
 import { getMeetingInterfaceTheme, setMeetingInterfaceTheme, type MeetingInterfaceTheme } from '../lib/meetingInterfaceTheme';
 import { KeyRecorder } from './ui/KeyRecorder';
 import { ProfileVisualizer, PremiumUpgradeModal } from '../premium';
-import icon from './icon.png';
+import icon from './hintily-icon.png';
 import {
     LEGACY_NATIVELY_COMMERCE_ENABLED,
     LEGACY_PROVIDER_CONFIGURATION_ENABLED,

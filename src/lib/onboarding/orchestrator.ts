@@ -154,7 +154,9 @@ export const DEFAULT_USER_STATE: UserState = {
   hasNativelyKey: false,
   hasTrialToken: false,
   extensionConnected: false,
-  extensionSupported: true,
+  // Disabled for the current Hintily launch. The extension stage and its
+  // implementation remain available for a future controlled re-enable.
+  extensionSupported: false,
   permsShown: false,
   macTCCBlocked: false,
   seenProfileOnboarding: false,
