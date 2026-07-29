@@ -83,6 +83,48 @@ test('existing Supabase compatibility migration is replayable and non-destructiv
   assert.doesNotMatch(migration, /\bdrop table\b|\btruncate\b|\bdelete from\b/i);
 });
 
+test('legacy Google profiles are reconciled and existing auth users are backfilled', () => {
+  const migration = read(
+    'supabase/migrations/202607290002_hintily_user_profile_reconciliation.sql',
+  );
+
+  assert.match(migration, /add column if not exists id uuid/);
+  assert.match(migration, /add column if not exists email text/);
+  assert.match(migration, /coalesce\(id, user_id, gen_random_uuid\(\)\) as canonical_user_id/);
+  assert.match(migration, /id = canonical\.canonical_user_id/);
+  assert.match(migration, /user_id = canonical\.canonical_user_id/);
+  assert.match(
+    migration,
+    /insert into public\.user_profiles\(\s*id,\s*email,\s*display_name,\s*user_id,\s*avatar_url/s,
+  );
+  assert.match(migration, /from auth\.users users/);
+  assert.match(migration, /profiles\.id = users\.id or profiles\.user_id = users\.id/);
+  assert.match(migration, /after insert on auth\.users/);
+  assert.match(
+    migration,
+    /when unique_violation or not_null_violation or check_violation\s+or foreign_key_violation or undefined_column/,
+  );
+  assert.doesNotMatch(migration, /exception when others/i);
+  assert.doesNotMatch(migration, /\bdrop table\b|\btruncate\b|\bdelete from\b/i);
+});
+
+test('free-session reconciliation is serialized, idempotent, and account-bound', () => {
+  const migration = read(
+    'supabase/migrations/202607290003_hintily_trial_grant_reconciliation.sql',
+  );
+
+  assert.match(migration, /from auth\.users u[\s\S]*for update/);
+  assert.match(migration, /verified_google_identity_required/);
+  assert.match(migration, /where e\.user_id = caller[\s\S]*e\.source = 'free_trial'/);
+  assert.match(
+    migration,
+    /where a\.user_id = caller[\s\S]*a\.kind = 'trial' or a\.session_type = 'free'/,
+  );
+  assert.match(migration, /'free',[\s\S]*'available',[\s\S]*1200,[\s\S]*1200/);
+  assert.doesNotMatch(migration, /on conflict \(source, source_reference\)/);
+  assert.doesNotMatch(migration, /\bdrop table\b|\btruncate\b|\bdelete from\b/i);
+});
+
 test('phases 5–9 keep grants and metered usage behind server-side functions', () => {
   const sessions = read('supabase/migrations/202607270003_hintily_business_sessions.sql');
   const payments = read('supabase/migrations/202607270004_hintily_dodo_processing.sql');

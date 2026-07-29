@@ -3,11 +3,34 @@ import { authenticatedClient, consumeActionRate, json, readJson } from '../_shar
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const response = (status: number, body: unknown) => json(status, body, corsHeaders);
-const rpcError = (error: { message?: string } | null) => {
+type RpcFailure = {
+  code?: string;
+  message?: string;
+  details?: string;
+  hint?: string;
+};
+
+const rpcError = (error: RpcFailure | null, action: string) => {
+  // Keep database internals out of the client response, but retain enough
+  // detail in Edge Function logs to diagnose a production schema mismatch.
+  console.error('[hintily-business] RPC failed', {
+    action,
+    code: error?.code,
+    message: error?.message,
+    details: error?.details,
+    hint: error?.hint,
+  });
   const code = String(error?.message || 'business_request_failed').match(
-    /no_time_remaining|session_already_active|session_surface_mismatch|session_not_found|session_not_active|session_not_activatable|ai_provider_not_ready|stt_providers_not_ready|post_processing_not_allowed|invalid_heartbeat/,
+    /verified_google_identity_required|no_time_remaining|session_already_active|session_surface_mismatch|session_not_found|session_not_active|session_not_activatable|ai_provider_not_ready|stt_providers_not_ready|post_processing_not_allowed|invalid_heartbeat/,
   )?.[0];
-  return response(code === 'no_time_remaining' ? 402 : code ? 409 : 500, {
+  const status = code === 'no_time_remaining'
+    ? 402
+    : code === 'verified_google_identity_required'
+      ? 403
+      : code
+        ? 409
+        : 500;
+  return response(status, {
     error: code || 'business_request_failed',
   });
 };
@@ -28,7 +51,7 @@ Deno.serve(async (request) => {
         return response(429, { error: 'rate_limit_exceeded' });
       }
       const { data, error } = await auth.client.rpc('hintily_account_state_v2');
-      return error ? rpcError(error) : response(200, data);
+      return error ? rpcError(error, action) : response(200, data);
     }
     if (request.method === 'GET' && action === 'purchases') {
       const { data, error } = await auth.client
@@ -45,7 +68,7 @@ Deno.serve(async (request) => {
         return response(429, { error: 'rate_limit_exceeded' });
       }
       const { data, error } = await auth.client.rpc('hintily_ensure_trial');
-      return error ? rpcError(error) : response(200, data);
+      return error ? rpcError(error, action) : response(200, data);
     }
 
     const body = await readJson(request);
@@ -63,7 +86,7 @@ Deno.serve(async (request) => {
         requested_client_session_id: clientSessionId,
         requested_surface: surface,
       });
-      return error ? rpcError(error) : response(200, data);
+      return error ? rpcError(error, action) : response(200, data);
     }
     const sessionId = String(body.session_id || '');
     if (!UUID.test(sessionId)) return response(400, { error: 'invalid_session_id' });
@@ -80,7 +103,7 @@ Deno.serve(async (request) => {
         requested_session_id: sessionId,
         requested_channel: channel,
       });
-      return error ? rpcError(error) : response(200, { ready: data === true });
+      return error ? rpcError(error, action) : response(200, { ready: data === true });
     }
     if (action === 'activate') {
       if (!await consumeActionRate(auth.client, 'session_activate', 12, 60)) {
@@ -89,7 +112,7 @@ Deno.serve(async (request) => {
       const { data, error } = await auth.client.rpc('hintily_activate_session', {
         requested_session_id: sessionId,
       });
-      return error ? rpcError(error) : response(200, data);
+      return error ? rpcError(error, action) : response(200, data);
     }
     if (action === 'begin-post-processing') {
       if (!await consumeActionRate(auth.client, 'session_post_processing', 12, 60)) {
@@ -98,7 +121,7 @@ Deno.serve(async (request) => {
       const { data, error } = await auth.client.rpc('hintily_begin_post_processing', {
         requested_session_id: sessionId,
       });
-      return error ? rpcError(error) : response(200, data);
+      return error ? rpcError(error, action) : response(200, data);
     }
     if (action === 'heartbeat') return response(410, { error: 'relay_heartbeat_required' });
     if (action === 'complete') {
@@ -110,7 +133,7 @@ Deno.serve(async (request) => {
         requested_session_id: sessionId,
         requested_failure_code: failure,
       });
-      return error ? rpcError(error) : response(200, data);
+      return error ? rpcError(error, action) : response(200, data);
     }
     return response(404, { error: 'not_found' });
   } catch (error) {
