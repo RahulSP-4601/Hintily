@@ -122,7 +122,16 @@ describe('worker isolation — source guards', () => {
   test('Whisper worker applies bounded session options on its ASR pipeline', () => {
     const src = read('electron/audio/whisper/whisperWorker.ts');
     assert.match(src, /getBoundedOnnxSessionOptions/);
-    assert.match(src, /session_options:\s*getBoundedOnnxSessionOptions\(\)/);
+    assert.match(
+      src,
+      /const\s+sessionOptions\s*=\s*getBoundedOnnxSessionOptions\(\)/,
+      'must compute the bounded options before constructing the ASR pipeline',
+    );
+    assert.match(
+      src,
+      /session_options:\s*sessionOptions/,
+      'must pass the bounded options to the ASR pipeline',
+    );
   });
 
   test('packaging: the two new worker scripts are asar-unpacked (native ONNX addon needs a real on-disk path)', () => {

@@ -9,6 +9,7 @@ on:
 jobs:
   electron-entry-smoke:
     runs-on: macos-latest
+    timeout-minutes: 15
     if: github.event_name != 'schedule'
 
     steps:
@@ -53,8 +54,22 @@ jobs:
       - name: Verify packaged local fallback assets (source mode)
         run: npm run verify:packaged-local-assets
 
-      - name: Run Electron unit tests
-        run: npm test
+      # Keep this workflow a true smoke test. The complete Electron suite spans
+      # hundreds of files and belongs in the full CI/nightly test workflow; it
+      # can also be held open by a leaked timer in an unrelated test. These
+      # focused files cover startup/packaging, provider routing, native audio,
+      # streaming, code verification, and local RAG wiring.
+      - name: Run focused Electron smoke tests
+        run: |
+          node --test \
+            electron/services/__tests__/NewUserPcHardening2026_07_07.test.mjs \
+            electron/services/__tests__/ProviderGatewayPolicy.test.mjs \
+            electron/audio/__tests__/CaptureRestartRegression.test.mjs \
+            electron/audio/__tests__/NativeDodoSoftRequired.test.mjs \
+            electron/rag/__tests__/OnnxWorkerIsolationHardening2026_07_05.test.mjs \
+            electron/llm/__tests__/TextStreamFallback.test.mjs \
+            electron/llm/codeVerification/__tests__/VerificationFlag.test.mjs \
+            electron/update/AppState.isRealUpgrade.test.mjs
 
       - name: Run intelligence unit tests
         run: npm run test:intelligence
