@@ -17,14 +17,10 @@
 // isolated `tsc --noEmit` invocation and asserted to fail with the expected
 // diagnostic — not a source-text guess about what TypeScript would do.
 //
-// The fixture lives at fixtures/processQuestionGatedMissingParam.ts.fixture
-// (NOT `.ts`) so electron/tsconfig.json's `**/*.ts` include glob never picks
-// it up and it never breaks `npm run typecheck:electron`. This test copies
-// it to a real `.ts` file INSIDE the same fixtures directory (preserving
-// its relative import path to knowledgeOrchestratorGate.ts) immediately
-// before invoking tsc, and deletes it in a `finally`/`after` block so a
-// crash mid-test can never leave a stray `.ts` file for the main typecheck
-// to trip over.
+// The invalid call site is generated beside this test immediately before
+// invoking tsc, then deleted in a `finally`/`after` block. Keeping the fixture
+// inline prevents broad `fixtures/` ignore rules from silently removing a
+// required CI input while still exercising a real TypeScript compilation.
 
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,9 +31,13 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
-const fixturesDir = path.resolve(__dirname, 'fixtures');
-const fixtureSrc = path.join(fixturesDir, 'processQuestionGatedMissingParam.ts.fixture');
-const tempTsFile = path.join(fixturesDir, '__temp_compile_fixture_slice4_2026_07_25.ts');
+const tempTsFile = path.join(__dirname, '__temp_compile_fixture_slice4_2026_07_25.ts');
+const invalidCallSite = `import { processQuestionGated } from '../knowledgeOrchestratorGate';
+
+declare const orchestrator: Parameters<typeof processQuestionGated>[0];
+
+void processQuestionGated(orchestrator, 'What should I answer?');
+`;
 
 function cleanup() {
   try { fs.unlinkSync(tempTsFile); } catch { /* already gone */ }
@@ -48,7 +48,7 @@ describe('processQuestionGated\'s third parameter is a REAL compile-time require
 
   test('a call site that omits the `allowed` parameter fails tsc --noEmit with the expected diagnostic', () => {
     cleanup(); // in case a prior crashed run left it behind
-    fs.copyFileSync(fixtureSrc, tempTsFile);
+    fs.writeFileSync(tempTsFile, invalidCallSite, 'utf8');
     try {
       let stdout = '';
       let threw = false;

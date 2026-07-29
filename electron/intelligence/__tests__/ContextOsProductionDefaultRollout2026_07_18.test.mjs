@@ -490,11 +490,10 @@ describe('Context OS — multi-family coordinator admission predicate (2026-07-1
     }
   });
 
-  test('coordinator throw → legacy path resets coordinatorGovernedProfileEvidence and manualContextOsGeneration', async () => {
-    // Drive the real TurnEvidenceCoordinator with a resolver that throws, then
-    // assert the contract documented at ipcHandlers.ts:2325-2332 — the catch
-    // must reset both `coordinatorGovernedProfileEvidence` to `false` and
-    // `manualContextOsGeneration` to `null`, and must NOT crash the handler.
+  test('coordinator isolates a thrown retriever and returns a fail-closed pack', async () => {
+    // Drive the real TurnEvidenceCoordinator with one resolver that throws.
+    // Retriever failures are settled independently so one broken source cannot
+    // crash the handler or discard usable evidence from another source family.
     const co = cjsRequire(path.resolve(repoRoot, 'dist-electron/electron/intelligence/context-os/index.js'));
     const contract = co.buildTurnContractForSurface({
       surface: 'manual_chat',
@@ -514,28 +513,39 @@ describe('Context OS — multi-family coordinator admission predicate (2026-07-1
       requiredEvidenceKinds: ['reference_files', 'profile_resume', 'projects', 'profile_jd'],
       allowedEvidenceKinds: ['reference_files', 'profile_resume', 'projects', 'profile_jd'],
     };
-    // Mirror the catch-block invariants: a thrown retrieval resets both the
-    // "coordinator governed this turn" flag and the populated pack.
-    let coordinatorGovernedProfileEvidence = false;
-    let manualContextOsGeneration = null;
-    try {
-      const { TurnEvidenceCoordinator } = co;
-      const coordinator = new TurnEvidenceCoordinator();
-      await coordinator.resolve({
-        decision,
-        contract,
-        retrieveReferenceEvidence: async () => { throw new Error('INJECTED_RETRIEVAL_THROW'); },
-        retrieveProfileEvidence: async () => ({ packId: 'p', turnId: contract.turnId, sourceOwner: contract.sourceOwner, requestedProperty: contract.requestedProperty, items: [], rejected: [], coverage: { hasDirectEvidence: false, propertySatisfied: false, entityMatched: false, sourceOwnerSatisfied: true, confidence: 0 }, conflicts: [], answerPolicy: 'answer' }),
-      });
-      // Should not reach here — coordinator is fail-closed on retrieval error.
-      manualContextOsGeneration = { contract, evidencePack: { items: [] }, govern: true };
-      coordinatorGovernedProfileEvidence = true;
-    } catch (_err) {
-      // Legacy fallback mirrors ipcHandlers.ts:2325-2332.
-      coordinatorGovernedProfileEvidence = false;
-      manualContextOsGeneration = null;
-    }
-    assert.equal(coordinatorGovernedProfileEvidence, false, 'a thrown retrieval must reset the governed flag');
-    assert.equal(manualContextOsGeneration, null, 'a thrown retrieval must reset the populated pack');
+    const { TurnEvidenceCoordinator } = co;
+    const coordinator = new TurnEvidenceCoordinator();
+    const result = await coordinator.resolve({
+      decision,
+      contract,
+      retrieveReferenceEvidence: async () => { throw new Error('INJECTED_RETRIEVAL_THROW'); },
+      retrieveProfileEvidence: async () => ({
+        packId: 'p',
+        turnId: contract.turnId,
+        sourceOwner: contract.sourceOwner,
+        requestedProperty: contract.requestedProperty,
+        items: [],
+        rejected: [],
+        coverage: {
+          hasDirectEvidence: false,
+          propertySatisfied: false,
+          entityMatched: false,
+          sourceOwnerSatisfied: true,
+          confidence: 0,
+        },
+        conflicts: [],
+        answerPolicy: 'answer',
+      }),
+    });
+
+    assert.equal(result.pack.answerPolicy, 'refuse_insufficient_evidence');
+    assert.equal(result.pack.items.length, 0);
+    assert.ok(
+      result.failures.some((failure) => (
+        failure.family === 'reference_files'
+        && failure.reason === 'retrieval_returned_no_evidence'
+      )),
+      'the failed required reference family must be reported',
+    );
   });
 });
