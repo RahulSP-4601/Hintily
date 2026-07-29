@@ -112,6 +112,9 @@ test('free-session reconciliation is serialized, idempotent, and account-bound',
   const migration = read(
     'supabase/migrations/202607290003_hintily_trial_grant_reconciliation.sql',
   );
+  const legacyConstraints = read(
+    'supabase/migrations/202607290004_hintily_legacy_allocation_constraints.sql',
+  );
 
   assert.match(migration, /from auth\.users u[\s\S]*for update/);
   assert.match(migration, /verified_google_identity_required/);
@@ -123,6 +126,14 @@ test('free-session reconciliation is serialized, idempotent, and account-bound',
   assert.match(migration, /'free',[\s\S]*'available',[\s\S]*1200,[\s\S]*1200/);
   assert.doesNotMatch(migration, /on conflict \(source, source_reference\)/);
   assert.doesNotMatch(migration, /\bdrop table\b|\btruncate\b|\bdelete from\b/i);
+  assert.match(legacyConstraints, /attname = 'local_session_id'/);
+  assert.match(legacyConstraints, /alter column local_session_id drop not null/);
+  assert.match(legacyConstraints, /attname = 'ends_at'/);
+  assert.match(legacyConstraints, /alter column ends_at drop not null/);
+  assert.doesNotMatch(
+    legacyConstraints,
+    /\bdrop table\b|\btruncate\b|\bdelete from\b/i,
+  );
 });
 
 test('phases 5–9 keep grants and metered usage behind server-side functions', () => {
