@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useReducer, useId } from 'react';
 import { useT } from '../i18n';
 import { Download, Trash2, HardDrive, Check, Loader2, Zap, AlertCircle, ChevronDown, X } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence, LazyMotion, domAnimation, m } from 'framer-motion';
 import { isMac } from '../utils/platformUtils';
 
 interface ModelInfo {
@@ -52,10 +52,62 @@ interface OnnxRecoveryNotice {
     message: string;
 }
 
+interface LocalWhisperPanelState {
+    models: ModelInfo[];
+    hardware: HardwareInfo | null;
+    config: ChannelConfig;
+    downloadProgress: Record<string, number>;
+    downloadingSet: Set<string>;
+    recoveryNotice: RecoveryNotice | null;
+    onnxNotices: Partial<Record<OnnxRecoveryNotice['family'], OnnxRecoveryNotice>>;
+    loading: boolean;
+}
+
+type StateUpdater<T> = T | ((previous: T) => T);
+type LocalWhisperPanelFieldAction = {
+    [Key in keyof LocalWhisperPanelState]: {
+        type: 'field';
+        key: Key;
+        value: StateUpdater<LocalWhisperPanelState[Key]>;
+    }
+}[keyof LocalWhisperPanelState];
+type LocalWhisperPanelAction =
+    | LocalWhisperPanelFieldAction
+    | { type: 'update'; update: (state: LocalWhisperPanelState) => LocalWhisperPanelState };
+
+const INITIAL_PANEL_STATE: LocalWhisperPanelState = {
+    models: [],
+    hardware: null,
+    config: {
+        enabled: false,
+        micModelId: '',
+        systemModelId: '',
+        globalModelId: '',
+    },
+    downloadProgress: {},
+    downloadingSet: new Set(),
+    recoveryNotice: null,
+    onnxNotices: {},
+    loading: true,
+};
+
+function localWhisperPanelReducer(
+    state: LocalWhisperPanelState,
+    action: LocalWhisperPanelAction,
+): LocalWhisperPanelState {
+    if (action.type === 'update') return action.update(state);
+    const previous = state[action.key];
+    const next = typeof action.value === 'function'
+        ? (action.value as (value: typeof previous) => typeof previous)(previous)
+        : action.value;
+    return { ...state, [action.key]: next };
+}
+
 const electronAPI = (window as any).electronAPI;
 
 function PremiumSelect({ label, value, options, onChange, placeholder }: any) {
     const t = useT();
+    const controlId = useId();
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 
@@ -73,10 +125,12 @@ function PremiumSelect({ label, value, options, onChange, placeholder }: any) {
 
     return (
         <div ref={containerRef} className="relative z-20">
-            {label && <label className="block text-xs font-medium text-text-secondary mb-1.5 uppercase tracking-wide">{label}</label>}
+            {label && <label htmlFor={controlId} className="block text-xs font-medium text-text-secondary mb-1.5 uppercase tracking-wide">{label}</label>}
             <button
+                id={controlId}
+                type="button"
                 onClick={() => setIsOpen(!isOpen)}
-                className={`w-full group bg-bg-input border border-border-subtle hover:border-border-muted shadow-sm rounded-xl px-3.5 py-2.5 flex items-center justify-between transition-all duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] outline-none focus:ring-2 focus:ring-accent-focus ${isOpen ? 'ring-2 ring-accent-focus border-accent-focus' : ''}`}
+                className={`w-full group bg-bg-input border border-border-subtle hover:border-border-muted shadow-sm rounded-xl px-3.5 py-2.5 flex items-center justify-between transition-[background-color,border-color,box-shadow] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] outline-none focus:ring-2 focus:ring-accent-focus ${isOpen ? 'ring-2 ring-accent-focus border-accent-focus' : ''}`}
             >
                 <span className="text-sm text-text-primary font-medium truncate pr-4">{selectedLabel}</span>
                 <ChevronDown size={14} className={`text-text-tertiary transition-transform duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:text-text-secondary ${isOpen ? 'rotate-180' : ''}`} />
@@ -84,7 +138,7 @@ function PremiumSelect({ label, value, options, onChange, placeholder }: any) {
 
             <AnimatePresence>
                 {isOpen && (
-                    <motion.div
+                    <m.div
                         initial={{ opacity: 0, y: 4, scale: 0.98 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 4, scale: 0.98 }}
@@ -96,12 +150,13 @@ function PremiumSelect({ label, value, options, onChange, placeholder }: any) {
                                 const isSelected = value === option.id;
                                 return (
                                     <button
+                                        type="button"
                                         key={option.id}
                                         onClick={() => { onChange(option.id); setIsOpen(false); }}
-                                        className={`w-full rounded-[10px] px-3 py-2.5 flex items-center justify-between transition-all duration-200 group relative ${isSelected ? 'bg-bg-item-active text-text-primary shadow-inner' : 'hover:bg-bg-item-surface text-text-secondary hover:text-text-primary'}`}
+                                        className={`w-full rounded-[10px] px-3 py-2.5 flex items-center justify-between transition-[background-color,color,box-shadow] duration-200 group relative ${isSelected ? 'bg-bg-item-active text-text-primary shadow-inner' : 'hover:bg-bg-item-surface text-text-secondary hover:text-text-primary'}`}
                                     >
                                         <span className="text-sm font-medium">{option.name}</span>
-                                        {isSelected && <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }}><Check size={16} className="text-accent-primary" strokeWidth={3} /></motion.div>}
+                                        {isSelected && <m.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}><Check size={16} className="text-accent-primary" strokeWidth={3} /></m.div>}
                                     </button>
                                 );
                             })}
@@ -109,29 +164,43 @@ function PremiumSelect({ label, value, options, onChange, placeholder }: any) {
                                 <div className="px-3 py-2.5 text-sm text-text-tertiary italic text-center">{t('No models available')}</div>
                             )}
                         </div>
-                    </motion.div>
+                    </m.div>
                 )}
             </AnimatePresence>
         </div>
     );
 }
 
-export function LocalWhisperModelPanel() {
+function useLocalWhisperModelPanel() {
     const t = useT();
-    const [models, setModels] = useState<ModelInfo[]>([]);
-    const [hardware, setHardware] = useState<HardwareInfo | null>(null);
-    const [config, setConfig] = useState<ChannelConfig>({
-        enabled: false,
-        micModelId: '',
-        systemModelId: '',
-        globalModelId: ''
-    });
-    
-    const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
-    const [downloadingSet, setDownloadingSet] = useState<Set<string>>(new Set());
-    const [recoveryNotice, setRecoveryNotice] = useState<RecoveryNotice | null>(null);
-    const [onnxNotices, setOnnxNotices] = useState<Partial<Record<OnnxRecoveryNotice['family'], OnnxRecoveryNotice>>>({});
-    const [loading, setLoading] = useState(true);
+    const [panelState, dispatch] = useReducer(localWhisperPanelReducer, INITIAL_PANEL_STATE);
+    const {
+        models,
+        hardware,
+        config,
+        downloadProgress,
+        downloadingSet,
+        recoveryNotice,
+        onnxNotices,
+        loading,
+    } = panelState;
+    const setPanelValue = useCallback(<Key extends keyof LocalWhisperPanelState>(
+        key: Key,
+        value: StateUpdater<LocalWhisperPanelState[Key]>,
+    ) => {
+        dispatch({ type: 'field', key, value } as LocalWhisperPanelFieldAction);
+    }, []);
+    const updatePanel = useCallback(
+        (update: (state: LocalWhisperPanelState) => LocalWhisperPanelState) =>
+            dispatch({ type: 'update', update }),
+        [],
+    );
+    const setModels = useCallback((value: StateUpdater<ModelInfo[]>) => setPanelValue('models', value), [setPanelValue]);
+    const setConfig = useCallback((value: StateUpdater<ChannelConfig>) => setPanelValue('config', value), [setPanelValue]);
+    const setDownloadProgress = useCallback((value: StateUpdater<Record<string, number>>) => setPanelValue('downloadProgress', value), [setPanelValue]);
+    const setDownloadingSet = useCallback((value: StateUpdater<Set<string>>) => setPanelValue('downloadingSet', value), [setPanelValue]);
+    const setRecoveryNotice = useCallback((value: StateUpdater<RecoveryNotice | null>) => setPanelValue('recoveryNotice', value), [setPanelValue]);
+    const setOnnxNotices = useCallback((value: StateUpdater<Partial<Record<OnnxRecoveryNotice['family'], OnnxRecoveryNotice>>>) => setPanelValue('onnxNotices', value), [setPanelValue]);
 
     const loadData = useCallback(async () => {
         try {
@@ -155,61 +224,43 @@ export function LocalWhisperModelPanel() {
                 electronAPI?.onnxGetRecoveryNotice?.('reranker').catch(() => null),
             ]);
 
-            if (modelsRes) setModels(modelsRes.models ?? []);
-            if (hwRes) setHardware(hwRes);
-            if (cfgRes) setConfig(cfgRes);
-            if (noticeRes?.recovered) setRecoveryNotice(noticeRes);
-
             // Merge the three family-keyed notices into a single keyed object
             // so the chips render in a deterministic order. A `null` from the
             // IPC means "no notice this session" — leave the chip out.
-            const nextOnnx: typeof onnxNotices = {};
+            const nextOnnx: LocalWhisperPanelState['onnxNotices'] = {};
             if (intentRes) nextOnnx.intent = intentRes as OnnxRecoveryNotice;
             if (embedRes) nextOnnx.embeddings = embedRes as OnnxRecoveryNotice;
             if (rerankRes) nextOnnx.reranker = rerankRes as OnnxRecoveryNotice;
-            setOnnxNotices(nextOnnx);
 
             // Merge service state into UI state. We only mutate state for
             // entries the service knows about — a 'complete' entry triggers
             // a fresh `getModels` so the badge flips to "available" from
             // the actual filesystem check.
+            const nextProgress: Record<string, number> = {};
+            const nextDownloading = new Set<string>();
+            const interruptedIds = new Set<string>();
+            const cancelledIds = new Set<string>();
+            const errorIds = new Set<string>();
             if (Array.isArray(stateRes)) {
-                const nextProgress: Record<string, number> = {};
-                const nextDownloading = new Set<string>();
-                const interruptedIds: string[] = [];
-                const cancelledIds: string[] = [];
-                const errorIds: string[] = [];
                 for (const s of stateRes) {
                     if (!s || !s.modelId) continue;
                     if (s.status === 'downloading' || s.status === 'verifying') {
                         nextDownloading.add(s.modelId);
                         nextProgress[s.modelId] = typeof s.progress === 'number' ? s.progress : 0;
                     } else if (s.status === 'interrupted') {
-                        interruptedIds.push(s.modelId);
+                        interruptedIds.add(s.modelId);
                     } else if (s.status === 'cancelled') {
-                        cancelledIds.push(s.modelId);
+                        cancelledIds.add(s.modelId);
                     } else if (s.status === 'error') {
-                        errorIds.push(s.modelId);
+                        errorIds.add(s.modelId);
                     }
                     // 'complete' — handled below by re-fetching models so
                     // the disk-verified badge is shown.
                 }
-                setDownloadingSet(nextDownloading);
-                setDownloadProgress(prev => ({ ...prev, ...nextProgress }));
-                if (interruptedIds.length || cancelledIds.length || errorIds.length) {
-                    const interruptedSet = new Set(interruptedIds);
-                    const cancelledSet = new Set(cancelledIds);
-                    const errorSet = new Set(errorIds);
-                    setModels(prev => prev.map(m => {
-                        if (interruptedSet.has(m.id)) return { ...m, status: 'interrupted' as const };
-                        if (cancelledSet.has(m.id)) return { ...m, status: 'cancelled' as const };
-                        if (errorSet.has(m.id)) return { ...m, status: 'error' as const, errorMessage: 'Download was interrupted.' };
-                        return m;
-                    }));
-                }
             }
 
             // Auto-select initial models if none are set
+            let nextConfig = cfgRes as ChannelConfig | undefined;
             if (cfgRes && modelsRes && modelsRes.models) {
                 const list = modelsRes.models;
                 const avail = list.filter((m: any) => m.status === 'available');
@@ -232,15 +283,37 @@ export function LocalWhisperModelPanel() {
                     }
 
                     if (needsUpdate) {
-                        setConfig(newCfg);
+                        nextConfig = newCfg;
                         electronAPI?.localWhisperSetChannelConfig?.(newCfg);
                     }
                 }
             }
+            updatePanel((previous) => {
+                const baseModels: ModelInfo[] = modelsRes?.models ?? previous.models;
+                const nextModels = baseModels.map((model) => {
+                    if (interruptedIds.has(model.id)) return { ...model, status: 'interrupted' as const };
+                    if (cancelledIds.has(model.id)) return { ...model, status: 'cancelled' as const };
+                    if (errorIds.has(model.id)) {
+                        return { ...model, status: 'error' as const, errorMessage: 'Download was interrupted.' };
+                    }
+                    return model;
+                });
+                return {
+                    ...previous,
+                    models: nextModels,
+                    hardware: hwRes ?? previous.hardware,
+                    config: nextConfig ?? previous.config,
+                    downloadProgress: { ...previous.downloadProgress, ...nextProgress },
+                    downloadingSet: nextDownloading,
+                    recoveryNotice: noticeRes?.recovered ? noticeRes : previous.recoveryNotice,
+                    onnxNotices: nextOnnx,
+                    loading: false,
+                };
+            });
         } finally {
-            setLoading(false);
+            updatePanel((previous) => previous.loading ? { ...previous, loading: false } : previous);
         }
-    }, []);
+    }, [updatePanel]);
 
     useEffect(() => {
         loadData();
@@ -249,21 +322,40 @@ export function LocalWhisperModelPanel() {
     // Handle downloads
     useEffect(() => {
         const unsubProgress = electronAPI?.onLocalWhisperDownloadProgress?.((data: { modelId: string; progress: number }) => {
-            setDownloadProgress(prev => ({ ...prev, [data.modelId]: data.progress }));
+            updatePanel((previous) => ({
+                ...previous,
+                downloadProgress: { ...previous.downloadProgress, [data.modelId]: data.progress },
+            }));
         });
         const unsubComplete = electronAPI?.onLocalWhisperDownloadComplete?.((data: { modelId: string }) => {
-            setDownloadingSet(prev => { const s = new Set(prev); s.delete(data.modelId); return s; });
-            setDownloadProgress(prev => { const d = { ...prev }; delete d[data.modelId]; return d; });
+            updatePanel((previous) => {
+                const downloading = new Set(previous.downloadingSet);
+                downloading.delete(data.modelId);
+                const progress = { ...previous.downloadProgress };
+                delete progress[data.modelId];
+                return { ...previous, downloadingSet: downloading, downloadProgress: progress };
+            });
             loadData();
         });
         const unsubError = electronAPI?.onLocalWhisperDownloadError?.((data: { modelId: string; error: string }) => {
-            setDownloadingSet(prev => { const s = new Set(prev); s.delete(data.modelId); return s; });
-            setDownloadProgress(prev => { const d = { ...prev }; delete d[data.modelId]; return d; });
-            setModels(prev => prev.map(m => m.id === data.modelId ? { ...m, status: 'error', errorMessage: data.error } : m));
+            updatePanel((previous) => {
+                const downloading = new Set(previous.downloadingSet);
+                downloading.delete(data.modelId);
+                const progress = { ...previous.downloadProgress };
+                delete progress[data.modelId];
+                return {
+                    ...previous,
+                    downloadingSet: downloading,
+                    downloadProgress: progress,
+                    models: previous.models.map((model) => model.id === data.modelId
+                        ? { ...model, status: 'error', errorMessage: data.error }
+                        : model),
+                };
+            });
         });
         
         return () => { unsubProgress?.(); unsubComplete?.(); unsubError?.(); };
-    }, [loadData]);
+    }, [loadData, updatePanel]);
 
     const handleDownload = async (modelId: string) => {
         if (downloadingSet.has(modelId)) return;
@@ -328,13 +420,58 @@ export function LocalWhisperModelPanel() {
         await electronAPI?.localWhisperSetChannelConfig?.({ systemModelId: modelId });
     };
 
+    return {
+        t,
+        models,
+        hardware,
+        config,
+        downloadProgress,
+        downloadingSet,
+        recoveryNotice,
+        onnxNotices,
+        loading,
+        setRecoveryNotice,
+        setOnnxNotices,
+        handleDownload,
+        handleCancel,
+        handleDelete,
+        toggleDualChannel,
+        setGlobalModel,
+        setMicModel,
+        setSystemModel,
+    };
+}
+
+export function LocalWhisperModelPanel() {
+    const {
+        t,
+        models,
+        hardware,
+        config,
+        downloadProgress,
+        downloadingSet,
+        recoveryNotice,
+        onnxNotices,
+        loading,
+        setRecoveryNotice,
+        setOnnxNotices,
+        handleDownload,
+        handleCancel,
+        handleDelete,
+        toggleDualChannel,
+        setGlobalModel,
+        setMicModel,
+        setSystemModel,
+    } = useLocalWhisperModelPanel();
+
     if (loading) {
-        return <div className="p-4 flex justify-center text-text-tertiary"><Loader2 className="animate-spin w-5 h-5" /></div>;
+        return <div className="p-4 flex justify-center text-text-tertiary"><Loader2 className="animate-spin size-5" /></div>;
     }
 
     const availableModels = models.filter(m => m.status === 'available');
     
     return (
+        <LazyMotion features={domAnimation}>
         <div className="space-y-4">
             {recoveryNotice && (
                 <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex items-start gap-3 text-amber-700 dark:text-amber-300">
@@ -346,6 +483,7 @@ export function LocalWhisperModelPanel() {
                         </p>
                     </div>
                     <button
+                        type="button"
                         onClick={() => setRecoveryNotice(null)}
                         className="p-1 rounded-md text-text-tertiary hover:text-text-primary hover:bg-bg-elevated transition-colors"
                         aria-label={t("Dismiss recovery notice")}
@@ -384,7 +522,7 @@ export function LocalWhisperModelPanel() {
                     <p className="text-xs text-text-secondary mt-1 leading-relaxed">{t('Select the AI models you want to use for Speech-to-Text inference.')}</p>
                 </div>
 
-                <label className="flex items-center justify-between p-3.5 rounded-xl border border-border-subtle bg-bg-elevated/30 hover:bg-bg-elevated transition-all duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] cursor-pointer group mb-5 active:scale-[0.99]">
+                <label className="flex items-center justify-between p-3.5 rounded-xl border border-border-subtle bg-bg-elevated/30 hover:bg-bg-elevated transition-[background-color,border-color,transform] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] cursor-pointer group mb-5 active:scale-[0.99]">
                     <input 
                         type="checkbox" 
                         className="hidden" 
@@ -403,7 +541,7 @@ export function LocalWhisperModelPanel() {
                 <div className="space-y-4 relative z-10">
                     <AnimatePresence mode="wait">
                         {config.enabled ? (
-                            <motion.div 
+                            <m.div
                                 key="split"
                                 initial={{ opacity: 0, y: -10 }}
                                 animate={{ opacity: 1, y: 0 }}
@@ -425,9 +563,9 @@ export function LocalWhisperModelPanel() {
                                     options={availableModels}
                                     placeholder={t("Select system model")}
                                 />
-                            </motion.div>
+                            </m.div>
                         ) : (
-                            <motion.div 
+                            <m.div
                                 key="global"
                                 initial={{ opacity: 0, y: -10 }}
                                 animate={{ opacity: 1, y: 0 }}
@@ -441,7 +579,7 @@ export function LocalWhisperModelPanel() {
                                     options={availableModels}
                                     placeholder={t("Select global model")}
                                 />
-                            </motion.div>
+                            </m.div>
                         )}
                     </AnimatePresence>
                 </div>
@@ -466,7 +604,7 @@ export function LocalWhisperModelPanel() {
                         const isRecommended = hardware?.recommendedModel === model.id;
                         
                         return (
-                            <div key={model.id} className="p-4 flex items-center justify-between bg-bg-card border border-border-subtle rounded-[14px] hover:shadow-sm hover:border-border-muted transition-all duration-200">
+                            <div key={model.id} className="p-4 flex items-center justify-between bg-bg-card border border-border-subtle rounded-[14px] hover:shadow-sm hover:border-border-muted transition-[border-color,box-shadow] duration-200">
                                 <div className="flex-1 min-w-0 pr-4">
                                     <div className="flex items-center gap-2 mb-1.5">
                                         <span className="text-sm font-medium text-text-primary truncate tracking-tight">{model.name}</span>
@@ -490,6 +628,7 @@ export function LocalWhisperModelPanel() {
                                                 <div className="flex items-center gap-2">
                                                     <span className="text-accent-primary tabular-nums">{Math.round(progress)}%</span>
                                                     <button
+                                                        type="button"
                                                         onClick={(e) => { e.stopPropagation(); handleCancel(model.id); }}
                                                         className="text-text-tertiary hover:text-red-500 transition-colors duration-200 px-1.5 py-0.5 rounded-md hover:bg-red-500/10 normal-case tracking-normal font-medium"
                                                         title={t("Cancel download")}
@@ -500,7 +639,7 @@ export function LocalWhisperModelPanel() {
                                             </div>
                                             <div className="w-full h-1.5 bg-bg-input rounded-full overflow-hidden shadow-inner ring-1 ring-inset ring-black/5 dark:ring-white/5">
                                                 <div
-                                                    className="h-full bg-accent-primary transition-all duration-300 ease-out relative"
+                                                    className="h-full bg-accent-primary transition-[width] duration-300 ease-out relative"
                                                     style={{ width: `${progress}%` }}
                                                 >
                                                     <div className="absolute inset-0 bg-white/20 animate-pulse" />
@@ -524,8 +663,9 @@ export function LocalWhisperModelPanel() {
                                 <div className="flex-shrink-0 flex items-center gap-2">
                                     {!isAvailable && !isDownloading && (
                                         <button
+                                            type="button"
                                             onClick={() => handleDownload(model.id)}
-                                            className="group/btn relative h-[34px] px-4 flex items-center gap-1.5 rounded-[10px] bg-legacy-action-subtle hover:bg-legacy-action-subtle-hover text-legacy-action-bg text-[13px] font-semibold transition-all duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.96] shadow-sm"
+                                            className="group/btn relative h-[34px] px-4 flex items-center gap-1.5 rounded-[10px] bg-legacy-action-subtle hover:bg-legacy-action-subtle-hover text-legacy-action-bg text-[13px] font-semibold transition-[background-color,color,transform,box-shadow] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.96] shadow-sm"
                                         >
                                             <Download size={14} className="transition-transform duration-300 group-hover/btn:-translate-y-[2px]" />
                                             <span>{model.status === 'error' || model.status === 'interrupted' || model.status === 'cancelled' ? t('Retry') : t('Install')}</span>
@@ -534,8 +674,9 @@ export function LocalWhisperModelPanel() {
                                     
                                     {isAvailable && (
                                         <button
+                                            type="button"
                                             onClick={() => handleDelete(model.id)}
-                                            className="p-2 rounded-[10px] text-text-tertiary hover:bg-red-500/10 hover:text-red-500 transition-all duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.96]"
+                                            className="p-2 rounded-[10px] text-text-tertiary hover:bg-red-500/10 hover:text-red-500 transition-[background-color,color,transform] duration-300 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.96]"
                                             title={t("Delete model")}
                                         >
                                             <Trash2 size={16} />
@@ -557,6 +698,7 @@ export function LocalWhisperModelPanel() {
                 </div>
             )}
         </div>
+        </LazyMotion>
     );
 }
 
@@ -603,6 +745,7 @@ function OnnxRecoveryChip({
                 </p>
                 <div className="mt-2 flex items-center gap-3">
                     <button
+                        type="button"
                         onClick={handleRetry}
                         disabled={retrying}
                         className="text-[11px] font-semibold text-accent-primary hover:underline disabled:opacity-50"
@@ -615,6 +758,7 @@ function OnnxRecoveryChip({
                 </div>
             </div>
             <button
+                type="button"
                 onClick={onDismiss}
                 className="p-1 rounded-md text-text-tertiary hover:text-text-primary hover:bg-bg-elevated transition-colors"
                 aria-label={t("Dismiss recovery notice")}
