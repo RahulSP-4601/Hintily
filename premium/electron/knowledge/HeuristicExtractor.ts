@@ -62,7 +62,7 @@ const nameFromEmail = (email: string): string => email.split('@')[0]
 
 const splitList = (value: string): string[] => {
   const normalized = value
-    .replace(/^[A-Za-z /&-]{1,24}(?::|\s{2,}|▪)\s*/, '')
+    .replace(/^\s*(?:\d+[.)]\s*)?[A-Za-z][A-Za-z /&-]{0,30}(?::|\s{2,}|▪)\s*/, '')
     .replace(/[▪·]/g, ',');
   const parts: string[] = [];
   let current = '';
@@ -113,18 +113,31 @@ const parseSkills = (section: string[]): CategorizedSkills => {
   return result;
 };
 
+const monthName = '(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)';
+const yearToken = "(?:(?:19|20)\\d{2}|[’'‘`]\\d{2})";
+const dateTokenSource = `(?:\\d{1,2}\\/(?:19|20)\\d{2}|${monthName}\\s+${yearToken}|(?:19|20)\\d{2}(?:[-/.]\\d{1,2})?|present|current)`;
+const tokenDateRegex = new RegExp(`${dateTokenSource}.*$`, 'i');
+const hasDateRegex = new RegExp(dateTokenSource, 'i');
+
 const parseDateRange = (value: string): { start_date: string | null; end_date: string | null } => {
-  const token = /(?:\d{1,2}\/(?:19|20)\d{2}|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(?:19|20)\d{2}|(?:19|20)\d{2}(?:[-/.]\d{1,2})?|present|current)/gi;
-  const dates = value.match(token) || [];
+  const dates = value.match(new RegExp(dateTokenSource, 'gi')) || [];
   const normalize = (date?: string): string | null => {
     if (!date) return null;
     if (/present|current/i.test(date)) return null;
     const mmYear = date.match(/^(\d{1,2})\/(\d{4})$/);
     if (mmYear) return `${mmYear[2]}-${mmYear[1].padStart(2, '0')}`;
-    const monthYear = date.match(/^([A-Za-z]+)\s+(\d{4})$/);
+    const monthYear = date.match(/^([A-Za-z]+)\s+((?:19|20)\d{2}|[’'‘`]\d{2})$/);
     if (monthYear) {
       const months: Record<string, string> = { jan:'01', january:'01', feb:'02', february:'02', mar:'03', march:'03', apr:'04', april:'04', may:'05', jun:'06', june:'06', jul:'07', july:'07', aug:'08', august:'08', sep:'09', sept:'09', september:'09', oct:'10', october:'10', nov:'11', november:'11', dec:'12', december:'12' };
-      return `${monthYear[2]}-${months[monthYear[1].toLowerCase()]}`;
+      const normalizedYear = /^\d{4}$/.test(monthYear[2])
+        ? monthYear[2]
+        : (() => {
+          const abbreviatedYear = Number(monthYear[2].replace(/[’'‘`]/g, ''));
+          // Match the structured refiner's conventional pivot: 00-69 are
+          // interpreted as 2000-2069, while 70-99 are 1970-1999.
+          return `${abbreviatedYear >= 70 ? '19' : '20'}${String(abbreviatedYear).padStart(2, '0')}`;
+        })();
+      return `${normalizedYear}-${months[monthYear[1].toLowerCase()]}`;
     }
     const match = date.match(/^(\d{4})(?:[-/.](\d{1,2}))?/);
     return match ? `${match[1]}${match[2] ? `-${match[2].padStart(2, '0')}` : ''}` : null;
@@ -167,7 +180,7 @@ const parseExperience = (section: string[]): any[] => {
     }
     const at = line.match(/^(.+?)\s+(?:at|@)\s+(.+?)(?:\s*\((.*)\))?$/i);
     const dash = line.split(/\s+—\s+/).filter(Boolean);
-    const hasDate = /(?:19|20)\d{2}|present|current/i.test(line);
+    const hasDate = hasDateRegex.test(line);
     if (at) {
       push(); current = { ...make(), role: clean(at[1]), company: clean(at[2].replace(/\(.*$/, '')), ...parseDateRange(line) }; continue;
     }
@@ -207,8 +220,6 @@ const parseExperience = (section: string[]): any[] => {
   push();
   return result;
 };
-
-const tokenDateRegex = /(?:\d{1,2}\/(?:19|20)\d{2}|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(?:19|20)\d{2}|(?:19|20)\d{2}(?:[-/.]\d{1,2})?|present|current).*$/i;
 
 const parseProjects = (section: string[]): any[] => {
   const result: any[] = [];
@@ -262,13 +273,41 @@ export const heuristicResumeExtract = (rawText: string): any => {
   const name = (preamble.find(looksLikeName) || (email ? nameFromEmail(email) : ''))
     .replace(/,\s*(?:RN|BSN|CCRN|MBA|PMP|CPA|MD|PhD)(?:\s*,\s*(?:RN|BSN|CCRN|MBA|PMP|CPA|MD|PhD))*\s*$/i, '');
   const summaryLines = sections.summary || sections.profile || sections.objective || [];
+  const contactHeader = preamble.slice(0, 20).join('\n');
+  const phoneCandidates: string[] = contactHeader
+    .match(/(?:\+\d{1,3}[ \t.-]*)?(?:\(?\d{2,4}\)?[ \t.-]*){1,4}\d{3,4}/g) || [];
+  const phone = phoneCandidates.find((candidate) => {
+    const value = candidate.trim();
+    const digits = candidate.replace(/\D/g, '');
+    if (digits.length < 10 || digits.length > 15) return false;
+    const numericGroups = candidate.match(/\d+/g) || [];
+    const containsYear = numericGroups.some((group) => {
+      if (!/^\d{4}$/.test(group)) return false;
+      const year = Number(group);
+      return year >= 1900 && year <= 2099;
+    });
+    if (containsYear && !value.startsWith('+') && !value.includes('(')) return false;
+    if (/^\d{10,15}$/.test(value)) return true;
+    if (value.startsWith('+') || /[()]/.test(value)) return true;
+    const groupLengths = numericGroups.map((group) => group.length).join('-');
+    return new Set([
+      '3-3-4',
+      '2-4-4',
+      '4-3-3',
+      '5-5',
+      '3-4-4',
+      '1-3-3-4',
+      '2-5-5',
+      '3-5-5',
+    ]).has(groupLengths);
+  })?.trim() || '';
   const result: any = {
     _schema_version: 1,
     _extraction_mode: 'heuristic',
     identity: {
       name,
       email,
-      phone: String(rawText || '').match(/(?:\+\d{1,3}\s*)?(?:\(?\d{3}\)?[\s.-]*)?\d{3}[\s.-]*\d{4}/)?.[0] || '',
+      phone,
       location: '',
       linkedin: String(rawText || '').match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/\S+/i)?.[0] || '',
       github: String(rawText || '').match(/(?:https?:\/\/)?(?:www\.)?github\.com\/\S+/i)?.[0] || '',

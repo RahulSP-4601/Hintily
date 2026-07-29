@@ -9622,7 +9622,11 @@ export function initializeIpcHandlers(appState: AppState): void {
           };
         }
         const { DocType } = require('../premium/electron/knowledge/types');
-        const result = await orchestrator.ingestDocument(immutableResumePath, DocType.RESUME);
+        const result = await orchestrator.ingestDocument(
+          immutableResumePath,
+          DocType.RESUME,
+          { preExtractedResume: extraction },
+        );
         if (!result?.success && path.extname(resolvedPath).toLowerCase() === '.doc') {
           return { success: false, error: 'Legacy Word .doc files are not supported. Save the file as .docx and upload it again.' };
         }

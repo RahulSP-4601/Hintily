@@ -13,6 +13,12 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import {
+  extractResumePdfPagesWithSelectiveOcr,
+  resumePageIsUnreadable,
+  scoreResumePageText,
+  type ResumePageExtraction,
+} from './resume/ResumePdfOcr';
 
 /** The complete shared document-format contract for Modes + Profile uploads. */
 export const SAFE_DOCUMENT_EXTENSIONS = new Set([
@@ -26,16 +32,45 @@ const PARSE_TIMEOUT_MS = 30_000;
 
 let pdfjsWorkerSrcPinned = false;
 
-const withTimeout = <T>(promise: Promise<T>, label: string): Promise<T> =>
-  Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`${label} timed out after ${PARSE_TIMEOUT_MS}ms`)),
-        PARSE_TIMEOUT_MS,
-      ),
+const withTimeout = async <T>(promise: Promise<T>, label: string): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${PARSE_TIMEOUT_MS}ms`)),
+          PARSE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
+const mapWithConcurrency = async <T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> => {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(Math.max(1, concurrency), items.length) },
+      () => worker(),
     ),
-  ]);
+  );
+  return results;
+};
 
 /**
  * Pinned once per process. pdf-parse@2.x wraps pdfjs-dist@5.4.296 (legacy
@@ -100,6 +135,16 @@ export interface SafeDocumentTextExtractResult {
   binarySha256: string;
   pageCount?: number;
   extractedPageCount?: number;
+  hyperlinks?: string[];
+  hyperlinkEvidence?: Array<{
+    target: string;
+    label: string;
+    pageNumber: number;
+    isHeaderContactCandidate: boolean;
+  }>;
+  pages?: ResumePageExtraction[];
+  ocrPageCount?: number;
+  unreadablePageNumbers?: number[];
 }
 
 export interface SafeResumeExtractResult extends SafeDocumentTextExtractResult {
@@ -109,6 +154,32 @@ export interface SafeResumeExtractResult extends SafeDocumentTextExtractResult {
 
 export const SAFE_RESUME_EXTENSIONS = new Set(['.pdf', '.docx', '.txt']);
 export const SAFE_RESUME_MAX_BYTES = 10 * 1024 * 1024;
+
+export const isResumeContactHost = (target: string, expectedHost: string): boolean => {
+  try {
+    const hostname = new URL(target).hostname.toLowerCase().replace(/^www\./, '');
+    return hostname === expectedHost || hostname.endsWith(`.${expectedHost}`);
+  } catch {
+    return false;
+  }
+};
+
+export const selectResumeWebsiteContact = (
+  evidence: NonNullable<SafeDocumentTextExtractResult['hyperlinkEvidence']>,
+  linkedin?: string,
+  github?: string,
+): string | undefined => evidence.find((item) =>
+  item.isHeaderContactCandidate
+  && /\b(?:portfolio|website|personal site)\b/i.test(item.label)
+  && item.target !== linkedin
+  && item.target !== github)?.target;
+
+export const selectResumeSocialContact = (
+  evidence: NonNullable<SafeDocumentTextExtractResult['hyperlinkEvidence']>,
+  expectedHost: 'linkedin.com' | 'github.com',
+): string | undefined => evidence.find((item) =>
+  item.isHeaderContactCandidate
+  && isResumeContactHost(item.target, expectedHost))?.target;
 
 const normalizeResumeText = (input: string): string => input
   .replace(/\r\n?/g, '\n')
@@ -139,7 +210,7 @@ export const extractSafeResumeDocument = async (
   }
   let extracted: SafeDocumentTextExtractResult;
   try {
-    extracted = await extractSafeDocumentText(resolved);
+    extracted = await extractSafeDocumentText(resolved, { resumeOcrFallback: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     if (extension === '.pdf' && /password|encrypted/i.test(message)) {
@@ -147,12 +218,49 @@ export const extractSafeResumeDocument = async (
     }
     throw error;
   }
-  const normalizedContent = normalizeResumeText(extracted.content);
+  const hyperlinkTargets = extracted.hyperlinks || [];
+  const hyperlinkEvidence = extracted.hyperlinkEvidence || [];
+  const contactHyperlinks: string[] = [];
+  const linkedin = selectResumeSocialContact(hyperlinkEvidence, 'linkedin.com');
+  const github = selectResumeSocialContact(hyperlinkEvidence, 'github.com');
+  if (linkedin) contactHyperlinks.push(`LinkedIn: ${linkedin}`);
+  if (github) contactHyperlinks.push(`GitHub: ${github}`);
+
+  // PDF annotations retain their visible labels, so a "Portfolio" contact can
+  // be distinguished from employer, publication, and project links. Do not
+  // guess when a PDF supplies only an unlabeled generic annotation.
+  const labeledWebsite = selectResumeWebsiteContact(hyperlinkEvidence, linkedin, github);
+  const visibleHeader = extracted.content.split(/\r?\n/).slice(0, 16).join(' ');
+  const visibleWebsiteTarget = hyperlinkTargets.find((target) => {
+    if (target === linkedin || target === github) return false;
+    try {
+      const hostname = new URL(target).hostname.replace(/^www\./i, '');
+      return hostname.length > 0 && visibleHeader.toLowerCase().includes(hostname.toLowerCase());
+    } catch {
+      return false;
+    }
+  });
+  const website = labeledWebsite || visibleWebsiteTarget;
+  if (website) {
+    contactHyperlinks.push(`Website: ${website}`);
+  }
+
+  const linkEvidence = contactHyperlinks.length
+    ? `\n\n[Document contact hyperlinks]\n${contactHyperlinks.join('\n')}`
+    : '';
+  const normalizedContent = normalizeResumeText(`${extracted.content}${linkEvidence}`);
+  const unreadablePageNumbers = extracted.unreadablePageNumbers || [];
+  if (extension === '.pdf' && unreadablePageNumbers.length > 0) {
+    throw new Error(
+      `resume OCR could not read page${unreadablePageNumbers.length === 1 ? '' : 's'} `
+      + `${unreadablePageNumbers.join(', ')}; export a searchable PDF or upload a clearer scan`,
+    );
+  }
   const meaningful = normalizedContent.replace(/\[Page \d+\]/g, '').match(/[\p{L}\p{N}]/gu)?.length || 0;
   if (meaningful < 20 || normalizedContent.split(/\s+/).length < 3) {
     if (extension === '.pdf' && extracted.pageCount &&
         (!extracted.extractedPageCount || extracted.extractedPageCount === 0)) {
-      throw new Error('scanned PDF has no text layer; OCR is not supported yet');
+      throw new Error('scanned PDF could not be read by the resume OCR fallback');
     }
     throw new Error('resume extraction produced too little readable text');
   }
@@ -173,6 +281,7 @@ export const extractSafeResumeDocument = async (
  */
 export const extractSafeDocumentText = async (
   inputFilePath: string,
+  options: { resumeOcrFallback?: boolean } = {},
 ): Promise<SafeDocumentTextExtractResult> => {
   const filePath = path.resolve(inputFilePath);
   const fileName = path.basename(filePath);
@@ -190,12 +299,27 @@ export const extractSafeDocumentText = async (
   let content = '';
   let pageCount: number | undefined;
   let extractedPageCount: number | undefined;
+  let hyperlinks: string[] | undefined;
+  let hyperlinkEvidence: SafeDocumentTextExtractResult['hyperlinkEvidence'];
+  let pages: ResumePageExtraction[] | undefined;
+  let ocrPageCount: number | undefined;
+  let unreadablePageNumbers: number[] | undefined;
 
   if (extension === '.pdf') {
     await pinPdfjsWorkerSrcOnce();
     const { PDFParse } = require('pdf-parse');
     const parser = new PDFParse({ data: binary });
-    const data: any = await withTimeout<any>(parser.getText(), 'PDF parse');
+    let data: any;
+    try {
+      data = await withTimeout<any>(parser.getText(), 'PDF parse');
+    } finally {
+      try {
+        await parser.destroy();
+      } catch {
+        // Cleanup is best-effort. Teardown must not replace a successful
+        // extraction result or conceal the original parse failure.
+      }
+    }
     pageCount =
       typeof data?.total === 'number' && data.total > 0
         ? data.total
@@ -206,14 +330,144 @@ export const extractSafeDocumentText = async (
       extractedPageCount = data.pages.filter(
         (page: any) => typeof page?.text === 'string' && page.text.trim(),
       ).length;
-      content = data.pages
-        .map(
-          (page: any) =>
-            `[Page ${page.num}]\n${typeof page.text === 'string' ? page.text : ''}`,
-        )
+      const nativePages = data.pages.map((page: any, index: number) => ({
+        pageNumber: Number(page?.num) || index + 1,
+        text: typeof page?.text === 'string' ? page.text : '',
+      }));
+      pages = options.resumeOcrFallback
+        ? await extractResumePdfPagesWithSelectiveOcr(binary, nativePages)
+        : nativePages.map((page: { pageNumber: number; text: string }) => ({
+            ...page,
+            source: 'native' as const,
+            qualityScore: scoreResumePageText(page.text),
+            nativeCharacterCount: page.text.trim().length,
+          }));
+      extractedPageCount = pages.filter((page) => page.text.trim()).length;
+      ocrPageCount = pages.filter((page) => page.source !== 'native').length;
+      unreadablePageNumbers = pages
+        .filter(resumePageIsUnreadable)
+        .map((page) => page.pageNumber);
+      content = pages
+        .map((page) => `[Page ${page.pageNumber}]\n${page.text}`)
         .join('\n\n');
     } else {
-      content = String(data?.text || '');
+      const nativeText = String(data?.text || '');
+      const nativePages = [{
+        pageNumber: 1,
+        text: nativeText,
+      }];
+      pages = options.resumeOcrFallback
+        ? await extractResumePdfPagesWithSelectiveOcr(binary, nativePages)
+        : [{
+            ...nativePages[0],
+            source: 'native',
+            qualityScore: scoreResumePageText(nativeText),
+            nativeCharacterCount: nativeText.trim().length,
+          }];
+      extractedPageCount = pages.filter((page) => page.text.trim()).length;
+      ocrPageCount = pages.filter((page) => page.source !== 'native').length;
+      unreadablePageNumbers = pages
+        .filter(resumePageIsUnreadable)
+        .map((page) => page.pageNumber);
+      content = pages.map((page) => `[Page ${page.pageNumber}]\n${page.text}`).join('\n\n');
+    }
+
+    if (options.resumeOcrFallback) {
+      // Text extraction does not include PDF annotation targets. Résumés often
+      // render only "LinkedIn" or "Portfolio" while the actual URL lives in an
+      // annotation, so retain those targets as source evidence. Ordinary PDF
+      // imports skip this second parse, and résumé pages use bounded concurrency
+      // to avoid loading an entire large document into memory at once.
+      let pdfDocument: any = null;
+      try {
+        const pdfjsLib: any = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        const loadingTask = pdfjsLib.getDocument({
+          data: Uint8Array.from(binary),
+          isEvalSupported: false,
+        });
+        pdfDocument = await withTimeout<any>(loadingTask.promise, 'PDF link parse');
+        const pageNumbers = Array.from(
+          { length: pdfDocument.numPages },
+          (_, index) => index + 1,
+        );
+        const pageEvidence = await mapWithConcurrency(
+          pageNumbers,
+          4,
+          async (pageNumber) => {
+            try {
+              const page = await withTimeout<any>(pdfDocument.getPage(pageNumber), 'PDF page link parse');
+              const viewport = page.getViewport({ scale: 1 });
+              const [annotations, textContent] = await Promise.all([
+                withTimeout<any[]>(page.getAnnotations(), 'PDF annotation parse'),
+                withTimeout<any>(page.getTextContent(), 'PDF link-label text parse'),
+              ]);
+              return annotations.flatMap((annotation) => {
+                const target = String(annotation?.url || annotation?.unsafeUrl || '').trim();
+                if (!/^https?:\/\/\S+$/i.test(target)) return [];
+                const rect = Array.isArray(annotation?.rect) ? annotation.rect.map(Number) : [];
+                const viewportRect = rect.length === 4
+                  ? viewport.convertToViewportRectangle(rect)
+                  : [];
+                const annotationTop = viewportRect.length === 4
+                  ? Math.min(Number(viewportRect[1]), Number(viewportRect[3]))
+                  : Number.POSITIVE_INFINITY;
+                const isHeaderContactCandidate = pageNumber === 1
+                  && annotationTop <= Number(viewport.height) * 0.35;
+                const label = rect.length === 4
+                  ? (textContent?.items || [])
+                    .filter((item: any) => {
+                      const transform = Array.isArray(item?.transform) ? item.transform : [];
+                      if (transform.length < 6) return false;
+                      const x = Number(transform[4]);
+                      const y = Number(transform[5]);
+                      const width = Math.max(Number(item?.width) || 0, 1);
+                      const height = Math.max(Number(item?.height) || Math.abs(Number(transform[3])) || 0, 1);
+                      const tolerance = 3;
+                      return x + width >= Math.min(rect[0], rect[2]) - tolerance
+                        && x <= Math.max(rect[0], rect[2]) + tolerance
+                        && y + height >= Math.min(rect[1], rect[3]) - tolerance
+                        && y - height <= Math.max(rect[1], rect[3]) + tolerance;
+                    })
+                    .map((item: any) => String(item?.str || '').trim())
+                    .filter(Boolean)
+                    .join(' ')
+                    .replace(/\s+/g, ' ')
+                    .trim()
+                  : '';
+                return [{ target, label, pageNumber, isHeaderContactCandidate }];
+              });
+            } catch {
+              // Link annotations are optional enrichment. Preserve evidence from
+              // healthy pages when one malformed page cannot be inspected.
+              return [];
+            }
+          },
+        );
+        const uniqueEvidence = new Map<string, {
+          target: string;
+          label: string;
+          pageNumber: number;
+          isHeaderContactCandidate: boolean;
+        }>();
+        for (const evidence of pageEvidence.flat()) {
+          const key = `${evidence.pageNumber}\0${evidence.target}\0${evidence.label}`;
+          uniqueEvidence.set(key, evidence);
+        }
+        hyperlinkEvidence = [...uniqueEvidence.values()];
+        hyperlinks = [...new Set(hyperlinkEvidence.map((evidence) => evidence.target))];
+      } catch {
+        // Annotation extraction is enrichment. A malformed link must never
+        // discard otherwise valid PDF text.
+      } finally {
+        if (pdfDocument) {
+          try {
+            await pdfDocument.destroy();
+          } catch {
+            // Cleanup is best-effort. A destroy failure must not replace a
+            // successful text extraction with an unrelated cleanup error.
+          }
+        }
+      }
     }
   } else if (extension === '.docx') {
     const mammoth = require('mammoth');
@@ -233,5 +487,10 @@ export const extractSafeDocumentText = async (
     binarySha256,
     pageCount,
     extractedPageCount,
+    hyperlinks,
+    hyperlinkEvidence,
+    pages,
+    ocrPageCount,
+    unreadablePageNumbers,
   };
 };

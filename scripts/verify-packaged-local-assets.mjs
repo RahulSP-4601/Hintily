@@ -44,6 +44,10 @@ const REQUIRED_PACKAGE_DIRS = [
   'node_modules/@huggingface/transformers',
   'node_modules/onnxruntime-common',
   'node_modules/onnxruntime-node',
+  'node_modules/tesseract.js',
+  'node_modules/tesseract.js-core',
+  'node_modules/@tesseract.js-data/eng',
+  'node_modules/@napi-rs/canvas',
 ];
 
 // Required asarUnpack globs (kept as a single source of truth for the
@@ -52,6 +56,10 @@ const REQUIRED_ASARUNPACK_GLOBS = [
   '**/node_modules/@huggingface/transformers/**',
   '**/node_modules/onnxruntime-common/**',
   '**/node_modules/onnxruntime-node/**',
+  '**/node_modules/tesseract.js/**',
+  '**/node_modules/tesseract.js-core/**',
+  '**/node_modules/@tesseract.js-data/eng/**',
+  '**/node_modules/@napi-rs/**',
   '**/intentClassifierWorker.js',
   '**/localEmbeddingWorker.js',
   '**/localRerankerWorker.js',
@@ -88,6 +96,8 @@ const REQUIRED_UNPACKED_NATIVE = [
   'node_modules/@img/sharp-libvips-darwin-x64/lib',
   'node_modules/sqlite-vec-darwin-arm64/vec0.dylib',
   'node_modules/sqlite-vec-darwin-x64/vec0.dylib',
+  'node_modules/@napi-rs/canvas-darwin-arm64/skia.darwin-arm64.node',
+  'node_modules/@napi-rs/canvas-darwin-x64/skia.darwin-x64.node',
   'native-module/index.darwin-arm64.node',
   'native-module/index.darwin-x64.node',
 ];

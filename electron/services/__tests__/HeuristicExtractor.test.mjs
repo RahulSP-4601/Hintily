@@ -137,6 +137,107 @@ describe('heuristicResumeExtract', () => {
       assert.ok(Array.isArray(r.skills[k]), `missing skills bucket ${k}`);
     }
   });
+
+  test('strips numbered category prefixes from individual skills', () => {
+    const parsed = heuristicResumeExtract(`Taylor Morgan
+
+SKILLS
+1. Languages: Python, TypeScript
+2. Cloud & DevOps: AWS, Docker
+`);
+    assert.ok(parsed.skills.languages.includes('Python'));
+    assert.ok(parsed.skills.languages.includes('TypeScript'));
+    assert.equal(
+      parsed.skills_flat.some((skill) => /^\d+[.)]|^[A-Za-z /&-]+:/.test(skill)),
+      false,
+      `skills must be clean values: ${JSON.stringify(parsed.skills_flat)}`,
+    );
+  });
+
+  test('normalizes abbreviated smart-apostrophe years in experience dates', () => {
+    const parsed = heuristicResumeExtract(`Taylor Morgan
+
+EXPERIENCE
+Engineer at Example Labs (Feb ’24 - Mar ’26)
+- Built a reliable ingestion service.
+`);
+    assert.equal(parsed.experience.length, 1);
+    assert.equal(parsed.experience[0].start_date, '2024-02');
+    assert.equal(parsed.experience[0].end_date, '2026-03');
+  });
+
+  test('uses the previous century for abbreviated years at or above the pivot', () => {
+    const parsed = heuristicResumeExtract(`Taylor Morgan
+
+EXPERIENCE
+Engineer at Example Labs (Jan '98 - Dec '99)
+- Built a reliable ingestion service.
+`);
+    assert.equal(parsed.experience.length, 1);
+    assert.equal(parsed.experience[0].start_date, '1998-01');
+    assert.equal(parsed.experience[0].end_date, '1999-12');
+  });
+
+  test('does not accept a seven-digit fragment as a phone number', () => {
+    const parsed = heuristicResumeExtract(`Taylor Morgan
+Reference number 557 1270
+
+SKILLS
+Languages: Python
+`);
+    assert.equal(parsed.identity.phone, '');
+  });
+
+  test('does not treat a sequence of employment years as a phone number', () => {
+    const parsed = heuristicResumeExtract(`Taylor Morgan
+
+EXPERIENCE
+Engineer
+2019 2020 2021
+
+SKILLS
+Languages: Python
+`);
+    assert.equal(parsed.identity.phone, '');
+  });
+
+  test('does not scan numeric IDs outside the contact header as phone numbers', () => {
+    const parsed = heuristicResumeExtract(`Taylor Morgan
+taylor@example.com
+
+EXPERIENCE
+Research Engineer at Example Labs
+- Publication reference 123 456 7890
+
+SKILLS
+Languages: Python
+`);
+    assert.equal(parsed.identity.phone, '');
+  });
+
+  test('does not accept a date-and-reference sequence in the header as a phone number', () => {
+    const parsed = heuristicResumeExtract(`Taylor Morgan
+Reference 2019 2020 1234
+taylor@example.com
+
+SKILLS
+Languages: Python
+`);
+    assert.equal(parsed.identity.phone, '');
+  });
+
+  test('accepts common international and domestic phone layouts in the header', () => {
+    const international = heuristicResumeExtract(`Taylor Morgan
++91 98765 43210
+taylor@example.com
+`);
+    assert.equal(international.identity.phone, '+91 98765 43210');
+    const domestic = heuristicResumeExtract(`Taylor Morgan
+415-555-2671
+taylor@example.com
+`);
+    assert.equal(domestic.identity.phone, '415-555-2671');
+  });
 });
 
 const JD = `Senior Data Analyst

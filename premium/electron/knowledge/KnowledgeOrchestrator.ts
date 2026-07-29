@@ -1,7 +1,11 @@
 import path from 'path';
 import { buildManualProfileEvidenceRoute } from '../../../electron/llm/profileAnswerBackend';
 import type { StructuredJobFacts, StructuredProfileFacts } from '../../../electron/llm/manualProfileIntelligence';
-import { extractSafeDocumentText } from '../../../electron/services/SafeDocumentTextExtractor';
+import {
+  extractSafeDocumentText,
+  extractSafeResumeDocument,
+  type SafeResumeExtractResult,
+} from '../../../electron/services/SafeDocumentTextExtractor';
 import { ProfilePackBuilder } from '../../../electron/services/knowledge/ProfilePackBuilder';
 import { heuristicJDExtract, heuristicResumeExtract, isDegenerateStructuredJd, isDegenerateStructuredResume } from './HeuristicExtractor';
 import { KnowledgeDatabaseManager } from './KnowledgeDatabaseManager';
@@ -811,7 +815,10 @@ export class KnowledgeOrchestrator {
   async ingestDocument(
     filePath: string,
     docType: DocTypeValue,
-    options?: { onProgress?: IngestProgressCallback },
+    options?: {
+      onProgress?: IngestProgressCallback;
+      preExtractedResume?: SafeResumeExtractResult;
+    },
   ): Promise<{ success: boolean; error?: string; extractionMode?: string }> {
     try {
       const requestOwner = this.ownerScope;
@@ -823,15 +830,36 @@ export class KnowledgeOrchestrator {
       }
 
       options?.onProgress?.({ stage: 'extracting_text', docType });
-      const extracted = await extractSafeDocumentText(filePath);
+      let extractedContent: string;
+      let extractedFilePath: string;
+      if (docType === DocType.RESUME) {
+        const preExtractedResume = options?.preExtractedResume;
+        if (
+          preExtractedResume &&
+          path.resolve(preExtractedResume.filePath) !== path.resolve(filePath)
+        ) {
+          return {
+            success: false,
+            error: 'Pre-extracted resume does not match the ingestion file.',
+          };
+        }
+        const extracted =
+          preExtractedResume ?? await extractSafeResumeDocument(filePath);
+        extractedContent = extracted.normalizedContent;
+        extractedFilePath = extracted.filePath;
+      } else {
+        const extracted = await extractSafeDocumentText(filePath);
+        extractedContent = extracted.content;
+        extractedFilePath = extracted.filePath;
+      }
       options?.onProgress?.({ stage: 'structuring_document', docType });
-      const { data, extractionMode } = await this.runStructuredExtraction(extracted.content, docType);
+      const { data, extractionMode } = await this.runStructuredExtraction(extractedContent, docType);
       options?.onProgress?.({ stage: 'validating_structure', docType, extractionMode });
       const normalized =
         docType === DocType.RESUME
           ? normalizeResume({ ...data, _extraction_mode: extractionMode })
           : normalizeJd({ ...data, _extraction_mode: extractionMode });
-      const structuredData = normalizeStructuredDocument(docType, normalized.data, extracted.content, { mode: extractionMode });
+      const structuredData = normalizeStructuredDocument(docType, normalized.data, extractedContent, { mode: extractionMode });
       const nodes = createDocumentNodes(structuredData, docType);
       options?.onProgress?.({ stage: 'building_index', docType, extractionMode, nodeCount: nodes.length });
       if ((this.embedWithMetadataFn || this.embedFn) && nodes.length) {
@@ -844,11 +872,11 @@ export class KnowledgeOrchestrator {
       const id = this.db.replaceDocumentAndNodes({
         type: docType,
         owner_scope: requestOwner,
-        source_uri: extracted.filePath,
+        source_uri: extractedFilePath,
         structured_data: structuredData,
         extraction_mode: extractionMode,
         schema_version: PROFILE_SCHEMA_VERSION,
-        source_hash: hashDocument(extracted.content),
+        source_hash: hashDocument(extractedContent),
         user_edited: false,
       }, nodes);
 

@@ -128,6 +128,7 @@ jobs:
           npm run prepare:hintily-config
           NATIVELY_BUILD_ALL_MAC_ARCHES=1 npm run build:native
           node scripts/ensure-sharp-mac-deps.js
+          node scripts/ensure-canvas-mac-deps.js
           ./node_modules/.bin/electron-builder --mac --config electron-builder.signed.cjs --publish never
 
       - name: Verify signature + notarization (both arches + DMGs)
