@@ -39,6 +39,8 @@ const GUARDED_FILES = [
   'src/components/settings/AIProvidersSettings.tsx',
   'src/components/settings/ProviderCard.tsx',
   'src/components/settings/HelpSettings.tsx',
+  'src/components/settings/HintilyAccountSettings.tsx',
+  'src/components/settings/HintilySubscriptionSettings.tsx',
   'src/components/settings/IntelligenceSettings.tsx',
   'src/components/settings/NativelyApiSettings.tsx',
   'src/components/settings/NativelyProSettings.tsx',

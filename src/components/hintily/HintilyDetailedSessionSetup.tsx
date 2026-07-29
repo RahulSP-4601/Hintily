@@ -19,6 +19,7 @@ import {
   type HintilyMode,
 } from '../../lib/hintily/launcherSession';
 import type { HintilyLauncherSurface } from './LauncherSessionSetup';
+import { useResolvedTheme } from '../../hooks/useResolvedTheme';
 
 type Device = { id: string; name: string };
 type PermissionState = Awaited<ReturnType<typeof window.electronAPI.checkPermissions>>;
@@ -108,6 +109,7 @@ const actionableStartError = (value: string): string => {
 
 export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.ReactElement {
   const { signedIn, account, hasAccess, refreshAccess } = useHintilyAccount();
+  const isDarkTheme = useResolvedTheme() === 'dark';
   const [draft, setDraft] = useState<Draft>(() => readDraft(surface));
   const [modes, setModes] = useState<HintilyMode[]>([]);
   const [modesLoading, setModesLoading] = useState(true);
@@ -449,11 +451,19 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
 
   if (!signedIn || !account) return <></>;
 
-  const fieldClass = 'w-full rounded-lg border border-border-subtle bg-bg-primary/45 px-3 py-2 text-sm text-text-primary outline-none transition focus:border-accent-primary/60';
-  const labelClass = 'mb-1 block text-[11px] font-medium text-text-secondary';
+  const fieldClass = `w-full rounded-xl border border-border-subtle bg-bg-input px-3.5 py-2.5 text-sm text-text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] outline-none transition placeholder:text-text-tertiary hover:border-border-muted focus:border-accent-primary/60 focus:ring-2 focus:ring-accent-primary/10 ${
+    isDarkTheme ? '[color-scheme:dark]' : '[color-scheme:light]'
+  }`;
+  const labelClass = 'mb-1.5 block text-[11px] font-semibold text-text-secondary';
 
   return (
-    <div className="mt-5 space-y-4 border-t border-border-subtle pt-5">
+    <div className="mt-6 space-y-5 border-t border-border-subtle pt-6">
+      <section className="rounded-2xl border border-border-subtle bg-bg-card/35 p-5">
+        <div className="mb-4">
+          <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-accent-primary">Session details</p>
+          <h3 className="mt-1 text-sm font-semibold text-text-primary">Personalize your assistance</h3>
+          <p className="mt-1 text-[11px] text-text-tertiary">This context helps Hintily produce relevant, role-specific answers.</p>
+        </div>
       <div className="grid gap-4 md:grid-cols-2">
         <div>
           <label className={labelClass}>Mode</label>
@@ -493,7 +503,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
       </div>
 
       {surface === 'interview_helper' ? (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
           <DocumentCard title="Resume" state={resumeState} required onUpload={() => void uploadDocument('resume')} />
           <DocumentCard
             title="Job description"
@@ -515,7 +525,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
           </DocumentCard>
         </div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
           <div>
             <label className={labelClass}>Company (optional)</label>
             <input className={fieldClass} maxLength={160} value={draft.company}
@@ -557,7 +567,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
         </div>
       )}
 
-      <div>
+      <div className="mt-4">
         <label className={labelClass}>
           {surface === 'meeting' ? 'Meeting purpose/context (optional)' : 'Additional interview context (optional)'}
         </label>
@@ -565,12 +575,14 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
           value={draft.context}
           onChange={event => updateDraft({ context: event.target.value })} />
       </div>
+      </section>
 
-      <div className="rounded-xl border border-border-subtle bg-bg-primary/25 p-4">
+      <section className="rounded-2xl border border-border-subtle bg-bg-card/35 p-5">
         <div className="mb-3 flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-text-primary">Audio readiness</h3>
-            <p className="text-[10px] text-text-tertiary">Tests and permission checks do not consume a session.</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-accent-primary">Device check</p>
+            <h3 className="mt-1 text-sm font-semibold text-text-primary">Audio readiness</h3>
+            <p className="mt-1 text-[10px] text-text-tertiary">Tests and permission checks do not consume a session.</p>
           </div>
           <button type="button" onClick={() => void loadDevicesAndPermissions()}
             disabled={devicesLoading || permissionsLoading}
@@ -580,7 +592,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
           </button>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
-          <div>
+          <div className="rounded-xl border border-border-subtle bg-bg-main/30 p-3">
             <label className={labelClass}><Mic size={11} className="mr-1 inline" />Microphone</label>
             <select className={fieldClass} value={draft.inputDeviceId}
               onChange={event => updateDraft({ inputDeviceId: event.target.value })}>
@@ -588,7 +600,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
               {inputDevices.map(device => <option key={device.id} value={device.id}>{device.name}</option>)}
             </select>
           </div>
-          <div>
+          <div className="rounded-xl border border-border-subtle bg-bg-main/30 p-3">
             <label className={labelClass}><Volume2 size={11} className="mr-1 inline" />System audio/output</label>
             <select className={fieldClass} value={draft.outputDeviceId}
               onChange={event => updateDraft({ outputDeviceId: event.target.value })}>
@@ -623,7 +635,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
             </span>
           )}
         </div>
-      </div>
+      </section>
 
       {documentMessage && (
         <p className={`text-xs ${resumeState === 'error' || jdState === 'error' ? 'text-red-400' : 'text-emerald-500'}`}>
@@ -640,7 +652,7 @@ export function HintilyDetailedSessionSetup({ surface, onStart }: Props): React.
         type="button"
         disabled={starting || !hasAccess || (Boolean(account.active_session) && !resumableSession)}
         onClick={() => void start()}
-        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-b from-sky-400 via-sky-500 to-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-[0_5px_18px_rgba(14,165,233,0.3)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+        className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-sky-300/30 bg-gradient-to-b from-sky-400 via-sky-500 to-blue-600 px-5 py-3.5 text-sm font-semibold text-white shadow-[0_10px_30px_rgba(14,165,233,0.3),inset_0_1px_0_rgba(255,255,255,0.3)] transition hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
       >
         {starting ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
         {starting
@@ -665,10 +677,18 @@ function DocumentCard({
   children?: React.ReactNode;
 }): React.ReactElement {
   return (
-    <div className="rounded-xl border border-border-subtle bg-bg-primary/25 p-4">
+    <div className={`rounded-xl border p-4 transition ${
+      state === 'ready'
+        ? 'border-emerald-500/25 bg-emerald-500/[0.045]'
+        : state === 'error'
+          ? 'border-red-500/25 bg-red-500/[0.045]'
+          : 'border-border-subtle bg-bg-main/30'
+    }`}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
-          <FileText size={16} className="text-accent-primary" />
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-primary/10 text-accent-primary">
+            <FileText size={15} />
+          </span>
           <div>
             <p className="text-xs font-semibold text-text-primary">{title}</p>
             <p className="text-[10px] text-text-tertiary">{required ? 'Required' : 'Optional'} · {
@@ -680,7 +700,7 @@ function DocumentCard({
           </div>
         </div>
         <button type="button" disabled={state === 'processing'} onClick={onUpload}
-          className="inline-flex items-center gap-1 rounded-lg border border-border-subtle px-2.5 py-1.5 text-[11px] text-text-secondary hover:bg-bg-subtle disabled:opacity-50">
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border-subtle bg-bg-elevated/70 px-2.5 py-1.5 text-[11px] font-medium text-text-secondary transition hover:border-accent-primary/30 hover:bg-bg-subtle hover:text-text-primary disabled:opacity-50">
           {state === 'processing'
             ? <Loader2 size={12} className="animate-spin" />
             : <Upload size={12} />}

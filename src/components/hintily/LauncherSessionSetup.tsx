@@ -199,8 +199,11 @@ export function LauncherSessionSetup({
   return (
     <section
       aria-labelledby="hintily-session-setup-title"
-      className="rounded-2xl border border-border-subtle bg-bg-elevated/75 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+      className="relative overflow-hidden rounded-[22px] border border-border-subtle bg-gradient-to-b from-bg-elevated/95 to-bg-main/95 p-6 shadow-[0_24px_70px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.045)]"
     >
+      <div className="pointer-events-none absolute -left-24 top-24 h-64 w-64 rounded-full bg-blue-500/[0.055] blur-3xl" />
+      <div className="pointer-events-none absolute -right-24 top-0 h-64 w-64 rounded-full bg-violet-500/[0.05] blur-3xl" />
+      <div className="relative">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent-primary">
@@ -388,6 +391,7 @@ export function LauncherSessionSetup({
           <HintilyPlanGrid compact />
         </div>
       )}
+      </div>
     </section>
   );
 }

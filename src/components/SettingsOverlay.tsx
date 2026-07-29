@@ -7,7 +7,7 @@ import {
     Camera, RotateCcw, Eye, Layout, MessageSquare, Crop,
     ChevronDown, ChevronUp, Check, BadgeCheck, Power, Palette, Calendar, Ghost, Sun, Moon, RefreshCw, Info, Globe, FlaskConical, Terminal, Settings, Activity, ExternalLink, Trash2,
     Sparkles, Pencil, Briefcase, Building2, Search, MapPin, CheckCircle, HelpCircle, Zap, SlidersHorizontal, PointerOff, Folder,
-    Star, AlertCircle, Gift, Smartphone, Cpu, Shield, Code2, Headphones
+    Star, AlertCircle, Gift, Smartphone, Cpu, Shield, Code2, Headphones, CreditCard
 } from 'lucide-react';
 import { analytics } from '../lib/analytics/analytics.service';
 import { AboutSection } from './AboutSection';
@@ -18,6 +18,7 @@ import { IntelligenceSettings } from './settings/IntelligenceSettings';
 import { SkillsSettings } from './settings/SkillsSettings';
 import { VisionModelBenchmark } from './settings/VisionModelBenchmark';
 import { HintilyAccountSettings } from './settings/HintilyAccountSettings';
+import { HintilySubscriptionSettings } from './settings/HintilySubscriptionSettings';
 import { LocalWhisperModelPanel } from './LocalWhisperModelPanel';
 import nativelyLogo from '../assets/hintily-logo.webp';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -1479,6 +1480,12 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                                         <User size={16} /> Account
                                     </button>
                                     <button
+                                        onClick={() => setActiveTab('subscription')}
+                                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 relative ${activeTab === 'subscription' ? "bg-bg-item-active text-text-primary before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-[2px] before:rounded-full before:bg-accent-primary" : "text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50"}`}
+                                    >
+                                        <CreditCard size={16} /> Subscription
+                                    </button>
+                                    <button
                                         onClick={() => setActiveTab('general')}
                                         className={`w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-3 relative ${activeTab === 'general' ? "bg-bg-item-active text-text-primary before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-[2px] before:rounded-full before:bg-accent-primary" : "text-text-secondary hover:text-text-primary hover:bg-bg-item-active/50"}`}
                                     >
@@ -1570,6 +1577,9 @@ const SettingsOverlay: React.FC<SettingsOverlayProps> = ({
                         <div className="flex-1 bg-bg-main overflow-y-auto p-8 relative">
                             {activeTab === 'account' && (
                                 <HintilyAccountSettings />
+                            )}
+                            {activeTab === 'subscription' && (
+                                <HintilySubscriptionSettings />
                             )}
                             {activeTab === 'general' && (
                                 <div className="space-y-6 animated fadeIn">

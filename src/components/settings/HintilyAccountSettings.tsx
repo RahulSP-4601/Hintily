@@ -1,29 +1,14 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   AlertCircle,
   CheckCircle2,
-  ExternalLink,
   LogIn,
   LogOut,
   RefreshCw,
   Trash2,
   UserRound,
 } from 'lucide-react';
-import type { HintilyPurchaseSummary } from '../../types/electron';
 import { useHintilyAccount } from '../../lib/hintily/HintilyAccountContext';
-import { HintilyPlanGrid } from '../hintily/HintilyPlanGrid';
-
-const formatPurchaseAmount = (purchase: HintilyPurchaseSummary): string => {
-  if (purchase.amount_minor == null || !purchase.currency) return 'Amount unavailable';
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: purchase.currency,
-    }).format(purchase.amount_minor / 100);
-  } catch {
-    return `${(purchase.amount_minor / 100).toFixed(2)} ${purchase.currency}`;
-  }
-};
 
 const formatRemainingTime = (seconds: number): string => {
   const safe = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
@@ -31,27 +16,23 @@ const formatRemainingTime = (seconds: number): string => {
 };
 
 export function HintilyAccountSettings(): React.ReactElement {
-  const [supportError, setSupportError] = useState<string | null>(null);
   const {
     status,
     authLoading,
     account,
     accountLoading,
     busy,
-    purchases,
-    purchaseHistoryState,
     notice,
     signInWithGoogle,
     signOut,
     deleteAccount,
     refreshAccess,
-    refreshPurchases,
   } = useHintilyAccount();
 
   const user = status.state === 'signed_in' ? status.user : null;
 
   return (
-    <div className="max-w-2xl space-y-6 animated fadeIn">
+    <div className="mx-auto max-w-2xl space-y-6 animated fadeIn">
       <div>
         <h3 className="mb-1 text-lg font-bold text-text-primary">Hintily account</h3>
         <p className="text-xs text-text-secondary">
@@ -77,7 +58,8 @@ export function HintilyAccountSettings(): React.ReactElement {
       )}
 
       {!authLoading && user ? (
-        <div className="rounded-xl border border-border-subtle bg-bg-subtle/30 p-5">
+        <div className="overflow-hidden rounded-2xl border border-border-subtle bg-gradient-to-b from-bg-elevated to-bg-subtle/20 shadow-[0_18px_50px_rgba(0,0,0,0.14)]">
+          <div className="p-6">
           <div className="flex items-center gap-4">
             {user.avatarUrl ? (
               <img
@@ -122,7 +104,7 @@ export function HintilyAccountSettings(): React.ReactElement {
             </button>
           </div>
 
-          <div className="mt-5 rounded-xl border border-border-subtle bg-bg-card/40 p-4">
+          <div className="mt-6 rounded-xl border border-border-subtle bg-bg-card/40 p-4">
             <p className="text-xs text-text-secondary">Hintily access</p>
             <p className="mt-1 text-xl font-bold text-text-primary">
               {accountLoading
@@ -182,75 +164,10 @@ export function HintilyAccountSettings(): React.ReactElement {
               Each purchased session can run for up to 60 minutes. Ending early consumes that
               session, and unused time does not carry forward.
             </p>
-            <div className="mt-3">
-              <HintilyPlanGrid />
-            </div>
+            <p className="mt-3 text-[11px] font-medium text-accent-primary">
+              Manage plans and billing from the Subscription tab.
+            </p>
           </div>
-
-          <div className="mt-5 rounded-lg border border-border-subtle p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-text-primary">Purchase history</p>
-                <p className="text-xs text-text-secondary">Dodo payment records linked to this account.</p>
-              </div>
-              <button
-                type="button"
-                onClick={async () => {
-                  setSupportError(null);
-                  try {
-                    const result = await window.electronAPI.hintilyOpenSupport();
-                    if (!result.success) setSupportError('Support could not be opened.');
-                  } catch {
-                    setSupportError('Support could not be opened.');
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-accent-primary"
-              >
-                Refunds & support <ExternalLink size={12} />
-              </button>
-            </div>
-            {supportError && <p className="mt-2 text-xs text-red-400">{supportError}</p>}
-
-            {purchaseHistoryState === 'loading' ? (
-              <p className="mt-3 text-xs text-text-secondary">Loading purchase history…</p>
-            ) : purchaseHistoryState === 'error' ? (
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <p className="text-xs text-amber-500">Purchase history is temporarily unavailable.</p>
-                <button
-                  type="button"
-                  onClick={() => void refreshPurchases()}
-                  className="text-xs font-medium text-accent-primary"
-                >
-                  Retry
-                </button>
-              </div>
-            ) : purchases.length === 0 ? (
-              <p className="mt-3 text-xs text-text-secondary">No purchases yet.</p>
-            ) : (
-              <div className="mt-3 space-y-2">
-                {purchases.map(purchase => (
-                  <div
-                    key={purchase.id}
-                    className="flex items-center justify-between gap-3 rounded-lg bg-bg-subtle/50 px-3 py-2"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-xs font-medium capitalize text-text-primary">
-                        {purchase.product_code.replace(/_/g, ' ')}
-                      </p>
-                      <p className="text-[11px] text-text-secondary">
-                        {new Date(purchase.purchased_at || purchase.created_at).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-text-primary">{formatPurchaseAmount(purchase)}</p>
-                      <p className="text-[11px] capitalize text-text-secondary">
-                        {purchase.status.replace(/_/g, ' ')}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       ) : !authLoading && status.state !== 'unconfigured' ? (
