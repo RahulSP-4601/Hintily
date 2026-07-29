@@ -5,7 +5,7 @@
 import { SessionTracker, TranscriptSegment } from './SessionTracker';
 import { LLMHelper } from './LLMHelper';
 import { DatabaseManager, Meeting } from './db/DatabaseManager';
-import { GROQ_TITLE_PROMPT, GROQ_SUMMARY_JSON_PROMPT } from './llm';
+import { GROQ_TITLE_PROMPT, GROQ_SUMMARY_JSON_PROMPT } from './llm/prompts';
 import { buildPostCallEnhancements } from './services/post-call/PostCallWorkflow';
 import { MeetingContextAssembler } from './services/meeting/MeetingContextAssembler';
 import type { MeetingSummaryTelemetryMeta } from './services/meeting/types';
@@ -448,10 +448,12 @@ export class MeetingPersistence {
                     try {
                         if (isIntelligenceFlagEnabled('meetingMemoryV2')) {
                             const { CrossMeetingRecall, priorFromDetailedSummary } = require('./services/meeting/CrossMeetingRecall');
-                            const recent = DatabaseManager.getInstance().getRecentMeetings(15)
-                                .filter(m => m.id !== meetingId)
-                                .map(priorFromDetailedSummary)
-                                .filter((p: unknown): p is NonNullable<typeof p> => p !== null);
+                            const recent: Array<NonNullable<ReturnType<typeof priorFromDetailedSummary>>> = [];
+                            for (const priorMeeting of DatabaseManager.getInstance().getRecentMeetings(15)) {
+                                if (priorMeeting.id === meetingId) continue;
+                                const prior = priorFromDetailedSummary(priorMeeting);
+                                if (prior !== null) recent.push(prior);
+                            }
                             const recall = new CrossMeetingRecall().compute(v3, recent);
                             if (recall.stillOpen.length > 0) {
                                 (summaryData as any).crossMeeting = recall;
@@ -1083,8 +1085,11 @@ function buildV3DetailedSummary(v3: import('./services/meeting/types').MeetingSu
 
 function buildBalancedTranscriptContext(transcript: TranscriptSegment[], maxChars: number): string {
     const lines = (Array.isArray(transcript) ? transcript : [])
-        .map(segment => `${segment.speaker || 'speaker'}: ${segment.text || ''}`)
-        .filter(line => line.trim().length > 0);
+        .reduce<string[]>((result, segment) => {
+            const line = `${segment.speaker || 'speaker'}: ${segment.text || ''}`;
+            if (line.trim().length > 0) result.push(line);
+            return result;
+        }, []);
     const full = lines.join('\n');
     if (full.length <= maxChars) return full;
 

@@ -374,10 +374,10 @@ async function stitchImages(captures: DisplayCapture[], selection: Electron.Rect
   console.log(`[ScreenshotHelper] Output dimensions: ${outputWidth}x${outputHeight}`);
   
   // Process each capture: resize to fit the output scale
-  const composites: sharp.OverlayOptions[] = [];
+  let composites: sharp.OverlayOptions[];
   
   try {
-    for (const capture of captures) {
+    composites = await Promise.all(captures.map(async (capture): Promise<sharp.OverlayOptions> => {
       // Calculate where this capture goes in output coordinates (physical pixels)
       const outputOffsetX = Math.round(capture.intersection.x - selection.x);
       const outputOffsetY = Math.round(capture.intersection.y - selection.y);
@@ -399,14 +399,15 @@ async function stitchImages(captures: DisplayCapture[], selection: Electron.Rect
         .png()
         .toBuffer();
       
-      composites.push({
+      const composite = {
         input: resizedBuffer,
         left: outputOffsetX,
         top: outputOffsetY
-      });
+      };
       
       console.log(`[ScreenshotHelper] Resized capture to ${targetWidth}x${targetHeight}`);
-    }
+      return composite;
+    }));
   } catch (error) {
     console.error('[ScreenshotHelper] Error processing capture buffers:', error);
     throw new Error(`Failed to process screenshot buffers: ${error instanceof Error ? error.message : 'Unknown error'}`);

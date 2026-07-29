@@ -27,7 +27,56 @@ import { getHintilyConfig } from './config/hintily';
 
 import { TRIAL_SENTINEL_KEY, DOM_CONTEXT_MAX_CHARS } from './config/constants';
 import { AI_RESPONSE_LANGUAGES, RECOGNITION_LANGUAGES } from './config/languages';
-import { planAnswer, formatAnswerPlanForPrompt, isCodingAnswerType, validateAnswerStructure, validateProfileOutput, validateProfileEvidence, buildProfileRepairInstruction, raceStreamWithDeadline, firstUsefulDeadlineMs, LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS, isStealthEvasionQuestion, stripProfileTokensFromCoding, isBareFollowUp, isRefinementFollowUp, buildContextFreeClarification, sanitizeCandidateAnswer, CANDIDATE_VOICE_ANSWER_TYPES, detectAssistantVoiceMisfire, ASSISTANT_VOICE_ANSWER_TYPES, piTelemetry, classifyProviderError, detectExplicitCodingContract, isCodingContinuation, buildPriorCodingContextBlock, buildCodingContractPrompt, explicitContractProducesCode, CODING_VERIFICATION_INSTRUCTION, humanizeDirectiveFor, detectCorporateFiller, humanizeForAnswerType, applySpeakabilityBudget, compressTechnicalConcept, checkCodeCompleteness, varySpokenOpening, type ExplicitCodingContract, type AnswerType } from './llm';
+import {
+  planAnswer,
+  formatAnswerPlanForPrompt,
+  isCodingAnswerType,
+  isStealthEvasionQuestion,
+  type AnswerType,
+} from './llm/AnswerPlanner';
+import { validateAnswerStructure } from './llm/AnswerValidator';
+import {
+  validateProfileOutput,
+  buildProfileRepairInstruction,
+  stripProfileTokensFromCoding,
+  sanitizeCandidateAnswer,
+  CANDIDATE_VOICE_ANSWER_TYPES,
+  detectAssistantVoiceMisfire,
+  ASSISTANT_VOICE_ANSWER_TYPES,
+} from './llm/ProfileOutputValidator';
+import { validateProfileEvidence } from './llm/profileEvidenceValidator';
+import {
+  raceStreamWithDeadline,
+  firstUsefulDeadlineMs,
+  LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS,
+} from './llm/liveDeadlines';
+import {
+  isBareFollowUp,
+  isRefinementFollowUp,
+  buildContextFreeClarification,
+} from './llm/FollowUpResolver';
+import { piTelemetry } from './llm/piTelemetry';
+import { classifyProviderError } from './llm/providerErrorClassifier';
+import {
+  detectExplicitCodingContract,
+  isCodingContinuation,
+  buildPriorCodingContextBlock,
+  buildCodingContractPrompt,
+  explicitContractProducesCode,
+  type ExplicitCodingContract,
+} from './llm/codingFollowup';
+import { CODING_VERIFICATION_INSTRUCTION } from './llm/codingContract';
+import {
+  humanizeDirectiveFor,
+  detectCorporateFiller,
+  humanizeForAnswerType,
+} from './llm/humanLikeness';
+import {
+  applySpeakabilityBudget,
+  compressTechnicalConcept,
+} from './llm/speakability';
+import { checkCodeCompleteness } from './llm/CodeSanityCheck';
+import { varySpokenOpening } from './llm/answerPolish';
 import type { StreamRouteOptions } from './llm/streamContextPolicy';
 import { buildProfileJitPrompt } from './llm/ProfileJitPromptBuilder';
 import { decideSessionWritePolicy, type FinalGenerationMode, type SessionWriteDecision } from './llm/FinalAnswerGenerationPolicy';
@@ -8351,6 +8400,8 @@ export function initializeIpcHandlers(appState: AppState): void {
     const services = ['Microphone', 'ScreenCapture']; // Capital letters REQUIRED.
     const results: Array<{ service: string; ok: boolean; output: string }> = [];
 
+    // These commands both mutate macOS's shared TCC database, so they must
+    // remain sequential even though the individual services are distinct.
     for (const service of services) {
       try {
         // Absolute path — defense-in-depth against PATH shadowing. tccutil is
@@ -8360,12 +8411,12 @@ export function initializeIpcHandlers(appState: AppState): void {
         const { stdout, stderr } = await execFileAsync('/usr/bin/tccutil', ['reset', service, bundleId], {
           timeout: 5000,
         });
-        results.push({ service, ok: true, output: (stdout || stderr || '').toString().trim() });
         console.log(`[IPC] tccutil reset ${service} ${bundleId}: OK`);
+        results.push({ service, ok: true, output: (stdout || stderr || '').toString().trim() });
       } catch (err: any) {
         const msg = err?.stderr?.toString?.() || err?.message || String(err);
-        results.push({ service, ok: false, output: msg.trim() });
         console.warn(`[IPC] tccutil reset ${service} ${bundleId} failed: ${msg}`);
+        results.push({ service, ok: false, output: msg.trim() });
       }
     }
 
@@ -8683,20 +8734,18 @@ export function initializeIpcHandlers(appState: AppState): void {
     try {
       const { getImageOptimizer } = require('./services/screen/ImageOptimizer');
       const optimizer = getImageOptimizer();
-      const optimized: string[] = [];
-      for (const p of paths) {
+      return await Promise.all(paths.map(async (p): Promise<string> => {
         try {
           const out = await optimizer.optimize(p, { profile, provider: 'openai', cacheKey: p });
-          optimized.push(out.path);
+          return out.path;
         } catch (err: any) {
           console.warn(
             `[IPC] ${handlerLabel}: image optimization failed for ${p}, using original`,
             { errorClass: err?.name },
           );
-          optimized.push(p);
+          return p;
         }
-      }
-      return optimized;
+      }));
     } catch {
       return paths;
     }

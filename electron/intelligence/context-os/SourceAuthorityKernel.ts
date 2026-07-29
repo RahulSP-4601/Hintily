@@ -208,9 +208,10 @@ export class SourceAuthorityKernel {
 
     const forbiddenSources = ALL_SOURCE_KINDS.filter((s) => !allowedKinds.has(s));
 
-    const referentOnlySources = allowedSources
-      .filter((s) => s.authority === 'referent_only')
-      .map((s) => s.sourceKind);
+    const referentOnlySources = allowedSources.reduce<SourceKind[]>((sources, source) => {
+      if (source.authority === 'referent_only') sources.push(source.sourceKind);
+      return sources;
+    }, []);
 
     return {
       turnId: input.turnId ?? randomUUID(),

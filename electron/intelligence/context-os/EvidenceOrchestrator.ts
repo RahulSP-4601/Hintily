@@ -140,9 +140,10 @@ export class EvidenceOrchestrator {
       return this.finalize(contract, items, rejected, targetEntities);
     }
 
-    for (const key of Object.keys(RETRIEVER_KINDS) as Array<keyof EvidenceRetrievers>) {
+    const retrievalResults = await Promise.all(
+      (Object.keys(RETRIEVER_KINDS) as Array<keyof EvidenceRetrievers>).map(async (key) => {
       const retriever = retrievers[key];
-      if (!retriever) continue;
+      if (!retriever) return null;
       const kinds = RETRIEVER_KINDS[key];
       const primaryKind = kinds[0];
 
@@ -150,15 +151,36 @@ export class EvidenceOrchestrator {
       if (!retrievable) {
         // Invariant 3: record the block WITHOUT calling the retriever — the
         // forbidden source is never fetched, and the trace shows why.
-        rejected.push({ sourceKind: primaryKind, reason: 'forbidden_source' });
-        continue;
+        return {
+          key,
+          kinds,
+          primaryKind,
+          forbidden: true as const,
+          block: null as string | null,
+        };
       }
 
-      let block: string | null = null;
       try {
-        block = (await retriever()) ?? null;
+        return {
+          key,
+          kinds,
+          primaryKind,
+          forbidden: false as const,
+          block: (await retriever()) ?? null,
+        };
       } catch {
         // Retrieval failures never break the turn; the pack just lacks items.
+        return null;
+      }
+    }));
+
+    // Promise.all preserves the canonical retriever order, so evidence ordering
+    // remains deterministic even though independent I/O runs concurrently.
+    for (const result of retrievalResults) {
+      if (!result) continue;
+      const { key, kinds, primaryKind, block } = result;
+      if (result.forbidden) {
+        rejected.push({ sourceKind: primaryKind, reason: 'forbidden_source' });
         continue;
       }
       if (!block || !block.trim()) continue;

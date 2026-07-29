@@ -11,18 +11,24 @@
 import type { IntentResult } from '../llm/IntentClassifier';
 import {
   planAnswer,
-  detectExplicitCodingContract,
-  isCodingContinuation,
-  isRefinementFollowUp,
-  classifyTargetSpeakability,
   type AnswerPlan,
   type AnswerSource,
   type AnswerType,
   type ContextLayer,
-  type ExplicitCodingContract,
   type SpeakerPerspective,
+} from '../llm/AnswerPlanner';
+import {
+  detectExplicitCodingContract,
+  isCodingContinuation,
+  type ExplicitCodingContract,
+} from '../llm/codingFollowup';
+import {
+  isRefinementFollowUp,
+} from '../llm/FollowUpResolver';
+import {
+  classifyTargetSpeakability,
   type SpeakabilityTarget,
-} from '../llm';
+} from '../llm/speakability';
 import type { ExtractedQuestion } from '../llm/transcriptQuestionExtractor';
 import type { ActiveModeInfo } from '../llm/modeProfiles';
 

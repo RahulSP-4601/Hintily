@@ -1,7 +1,5 @@
-import {
-  buildTemporalContext,
-  prepareTranscriptForWhatToAnswer,
-} from '../llm';
+import { buildTemporalContext } from '../llm/TemporalContextBuilder';
+import { prepareTranscriptForWhatToAnswer } from '../llm/transcriptCleaner';
 
 export interface PreparedContextItem {
   role: string;

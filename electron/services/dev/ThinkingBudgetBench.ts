@@ -20,7 +20,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { CHAT_MODE_PROMPT } from '../../llm/prompts';
-import { planAnswer, formatAnswerPlanForPrompt } from '../../llm';
+import { planAnswer, formatAnswerPlanForPrompt } from '../../llm/AnswerPlanner';
 import type { LLMHelper } from '../../LLMHelper';
 
 interface Problem {
@@ -194,8 +194,27 @@ print(json.dumps(results))
   });
 }
 
-const pct = (a: number[], p: number) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
+const pct = (a: number[], p: number) => { if (!a.length) return 0; const s = a.toSorted((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
 const mean = (a: number[]) => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : 0;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const runNext = async (): Promise<void> => {
+    const index = nextIndex++;
+    if (index >= items.length) return;
+    results[index] = await worker(items[index]);
+    await runNext();
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(Math.max(1, concurrency), items.length) }, () => runNext()),
+  );
+  return results;
+}
 
 // Run an arbitrary python solution defining `entry` against `inputs`. Returns an
 // array of { ok, value? , error? } per input, or null on infra failure.
@@ -235,7 +254,7 @@ print(json.dumps(out))
 function canonEqual(a: any, b: any): boolean {
   const c = (x: any): any => {
     if (Array.isArray(x) && x.length && x.every(e => Array.isArray(e))) {
-      return x.map(e => { try { return JSON.stringify([...e].sort()); } catch { return JSON.stringify(e); } }).sort();
+      return x.map(e => { try { return JSON.stringify(e.toSorted()); } catch { return JSON.stringify(e); } }).sort();
     }
     return x;
   };
@@ -362,8 +381,10 @@ export async function runThinkingMatrix(llmHelper: LLMHelper, opts: { model?: st
   if (!refSet.length) { log('[matrix] no dataset (set THINKING_BENCH_DATASET to cf10.json)'); return null; }
   log(`[matrix] pre-flight: consensus-deriving expected for ${refSet.length} problems...`);
   const problems: Problem[] = [];
-  for (const rp of refSet) {
-    const { problem, reason } = await deriveExpected(rp);
+  const derivedResults = await mapWithConcurrency(refSet, 4, deriveExpected);
+  for (let index = 0; index < refSet.length; index++) {
+    const rp = refSet[index];
+    const { problem, reason } = derivedResults[index];
     if (problem) problems.push(problem); else log(`[matrix] dropped ${rp.id} (${reason})`);
   }
   log(`[matrix] ${problems.length} problems usable\n`);
@@ -431,7 +452,7 @@ export async function runThinkingMatrix(llmHelper: LLMHelper, opts: { model?: st
   }
 
   // Summary per config
-  const pctl = (a: number[], p: number) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
+  const pctl = (a: number[], p: number) => { if (!a.length) return 0; const s = a.toSorted((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(s.length * p))]; };
   log(`\n[matrix] SUMMARY (model=${model}, ${problems.length} problems)`);
   log(`config        | ttft p50 | ttft p95 | total p50 | thoughts avg | correct`);
   const summary: any[] = [];
@@ -522,8 +543,10 @@ export async function runThinkingBudgetBench(llmHelper: LLMHelper, opts: BenchOp
     log(`[ThinkingBudgetBench] pre-flight: deriving expected outputs from ${refSet.length} reference solutions...`);
     const derived: Problem[] = [];
     const dropped: { id: string; reason: string }[] = [];
-    for (const rp of refSet) {
-      const { problem, reason } = await deriveExpected(rp);
+    const derivedResults = await mapWithConcurrency(refSet, 4, deriveExpected);
+    for (let index = 0; index < refSet.length; index++) {
+      const rp = refSet[index];
+      const { problem, reason } = derivedResults[index];
       if (problem) derived.push(problem); else dropped.push({ id: rp.id, reason: reason || 'unknown' });
     }
     log(`[ThinkingBudgetBench] pre-flight done: ${derived.length} usable, ${dropped.length} dropped`);

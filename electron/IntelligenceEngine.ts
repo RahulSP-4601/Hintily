@@ -5,24 +5,90 @@
 import { EventEmitter } from 'events';
 import { LLMHelper } from './LLMHelper';
 import { SessionTracker, TranscriptSegment, SuggestionTrigger, ContextItem } from './SessionTracker';
+import { AnswerLLM } from './llm/AnswerLLM';
+import { AssistLLM } from './llm/AssistLLM';
+import { BrainstormLLM } from './llm/BrainstormLLM';
+import { ClarifyLLM } from './llm/ClarifyLLM';
+import { CodeHintLLM } from './llm/CodeHintLLM';
+import { FollowUpLLM } from './llm/FollowUpLLM';
+import { RecapLLM } from './llm/RecapLLM';
+import { FollowUpQuestionsLLM } from './llm/FollowUpQuestionsLLM';
+import { WhatToAnswerLLM } from './llm/WhatToAnswerLLM';
+import { prepareTranscriptForWhatToAnswer } from './llm/transcriptCleaner';
 import {
-    AnswerLLM, AssistLLM, BrainstormLLM, ClarifyLLM, CodeHintLLM, FollowUpLLM, RecapLLM,
-    FollowUpQuestionsLLM, WhatToAnswerLLM,
-    prepareTranscriptForWhatToAnswer, buildTemporalContext,
-    AssistantResponse as LLMAssistantResponse, classifyIntent, planNextAssistantAction, PlannerDecision,
-    extractLatestQuestion, toCandidateFraming, planAnswer, validateAnswerStructure, detectAndExtractScaffoldMisfire, hasUnrecoveredScaffoldContamination, isCodingAnswerType, isJdFactualLookupNotNegotiationAdvice, resolveFollowUp, resolveFollowUpOrClarify,
-    isLiveSessionMemoryEnabled, resolveLiveFollowup, toMemoryMode, toSurface, effectiveMemoryMode,
-    resolveLiveSessionMemoryConfig, piTelemetry, ageBucket,
-    buildContextRoute, summarizeContextRoute, shouldThrottleTrigger,
-    validateProfileOutput, validateProfileEvidence, buildProfileRepairInstruction, sanitizeCandidateAnswer, CANDIDATE_VOICE_ANSWER_TYPES,
-    detectAssistantVoiceMisfire, ASSISTANT_VOICE_ANSWER_TYPES,
-    raceStreamWithDeadline, LIVE_INTER_TOKEN_STALL_MS, LIVE_TOTAL_HARD_TIMEOUT_MS,
-    LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS, LIVE_LOCAL_TOTAL_HARD_TIMEOUT_MS, isLeakedSchemaStub, isLeakedJsonEnvelope, extractAnswerFromJsonEnvelope,
-    isProviderTransportError, isLeakedInternalTagBlock, isLeakedAnswerArtifact,
-    cleanAnswerArtifacts, compressToSpeakable, SCAFFOLD_LABEL_RE, BOLD_PSEUDO_HEADER_RE,
-    buildProfileJitPrompt, decideSessionWritePolicy,
-    checkAnswerRelevance
-} from './llm';
+    buildTemporalContext,
+    type AssistantResponse as LLMAssistantResponse,
+} from './llm/TemporalContextBuilder';
+import { classifyIntent } from './llm/IntentClassifier';
+import {
+    planNextAssistantAction,
+    type PlannerDecision,
+} from './llm/PlannerDecision';
+import {
+    extractLatestQuestion,
+    toCandidateFraming,
+} from './llm/transcriptQuestionExtractor';
+import {
+    planAnswer,
+    isCodingAnswerType,
+    isJdFactualLookupNotNegotiationAdvice,
+} from './llm/AnswerPlanner';
+import {
+    validateAnswerStructure,
+    detectAndExtractScaffoldMisfire,
+    hasUnrecoveredScaffoldContamination,
+} from './llm/AnswerValidator';
+import {
+    resolveFollowUp,
+    resolveFollowUpOrClarify,
+} from './llm/FollowUpResolver';
+import {
+    isLiveSessionMemoryEnabled,
+    resolveLiveSessionMemoryConfig,
+} from './llm/liveSessionMemoryConfig';
+import {
+    resolveLiveFollowup,
+    toMemoryMode,
+    toSurface,
+    effectiveMemoryMode,
+} from './llm/liveSessionMemory';
+import { piTelemetry, ageBucket } from './llm/piTelemetry';
+import {
+    buildContextRoute,
+    summarizeContextRoute,
+} from './llm/contextRoute';
+import { shouldThrottleTrigger } from './llm/triggerGate';
+import {
+    validateProfileOutput,
+    buildProfileRepairInstruction,
+    sanitizeCandidateAnswer,
+    CANDIDATE_VOICE_ANSWER_TYPES,
+    detectAssistantVoiceMisfire,
+    ASSISTANT_VOICE_ANSWER_TYPES,
+} from './llm/ProfileOutputValidator';
+import { validateProfileEvidence } from './llm/profileEvidenceValidator';
+import {
+    raceStreamWithDeadline,
+    LIVE_INTER_TOKEN_STALL_MS,
+    LIVE_TOTAL_HARD_TIMEOUT_MS,
+    LIVE_LOCAL_FIRST_USEFUL_TIMEOUT_MS,
+    LIVE_LOCAL_TOTAL_HARD_TIMEOUT_MS,
+} from './llm/liveDeadlines';
+import {
+    isLeakedSchemaStub,
+    isLeakedJsonEnvelope,
+    extractAnswerFromJsonEnvelope,
+    isProviderTransportError,
+    isLeakedInternalTagBlock,
+    isLeakedAnswerArtifact,
+    cleanAnswerArtifacts,
+    compressToSpeakable,
+    SCAFFOLD_LABEL_RE,
+    BOLD_PSEUDO_HEADER_RE,
+} from './llm/answerPolish';
+import { buildProfileJitPrompt } from './llm/ProfileJitPromptBuilder';
+import { decideSessionWritePolicy } from './llm/FinalAnswerGenerationPolicy';
+import { checkAnswerRelevance } from './llm/AnswerRelevanceChecker';
 import {
     validateDocumentGroundedAnswer,
     completenessRegenFabricates,

@@ -91,8 +91,12 @@ function summarizeFetchError(err: any): Record<string, unknown> {
 function formatFetchError(err: any): string {
   const s = summarizeFetchError(err);
   return Object.entries(s)
-    .filter(([, v]) => v !== undefined && v !== null && v !== '')
-    .map(([k, v]) => `${k}=${String(v)}`)
+    .reduce<string[]>((parts, [key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        parts.push(`${key}=${String(value)}`);
+      }
+      return parts;
+    }, [])
     .join(' ');
 }
 
@@ -1186,14 +1190,18 @@ export class LLMHelper {
       let images: string[] | undefined;
       const imagePaths = Array.isArray(imagePath) ? imagePath : imagePath ? [imagePath] : [];
       if (imagePaths.length > 0) {
-        const encoded: string[] = [];
-        for (const path of imagePaths) {
+        const readResults = await Promise.all(imagePaths.map(async (path) => {
           try {
             const imageData = await fs.promises.readFile(path);
-            encoded.push(imageData.toString("base64"));
+            return imageData.toString("base64");
           } catch (e) {
             console.warn("[LLMHelper] callOllama: failed to read image, skipping:", path, e);
+            return null;
           }
+        }));
+        const encoded: string[] = [];
+        for (const result of readResults) {
+          if (result !== null) encoded.push(result);
         }
         if (encoded.length > 0) images = encoded;
       }
@@ -1677,6 +1685,53 @@ CRITICAL RULES:
         data: data.toString("base64")
       };
     }
+  }
+
+  private async processExistingImages(paths: string[]): Promise<Array<{ mimeType: string; data: string }>> {
+    const results = await Promise.all(paths.map(async (imagePath) => {
+      if (!fs.existsSync(imagePath)) return null;
+      return this.processImage(imagePath);
+    }));
+    const images: Array<{ mimeType: string; data: string }> = [];
+    for (const result of results) {
+      if (result !== null) images.push(result);
+    }
+    return images;
+  }
+
+  private async readImagesAsBase64(paths: string[]): Promise<string[]> {
+    return Promise.all(paths.map(async (imagePath) => (
+      await fs.promises.readFile(imagePath)
+    ).toString('base64')));
+  }
+
+  private async prepareLegacyApiImages(
+    paths: string[],
+    logPrefix: string,
+  ): Promise<Array<{ mime_type: string; data: string }>> {
+    const results = await Promise.all(paths.map(async (imagePath) => {
+      if (!fs.existsSync(imagePath)) return null;
+      try {
+        const compressed = await sharp(imagePath)
+          .resize(1920, 1920, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 85 })
+          .toBuffer();
+        return { mime_type: 'image/jpeg', data: compressed.toString('base64') };
+      } catch (compressErr: any) {
+        console.warn(`${logPrefix}: image compression failed, sending raw:`, compressErr.message);
+        const imageData = await fs.promises.readFile(imagePath);
+        if (imageData.length > 500 * 1024) {
+          console.warn(`${logPrefix}: raw fallback image too large to send, skipping:`, imagePath);
+          return null;
+        }
+        return { mime_type: 'image/png', data: imageData.toString('base64') };
+      }
+    }));
+    const images: Array<{ mime_type: string; data: string }> = [];
+    for (const result of results) {
+      if (result !== null) images.push(result);
+    }
+    return images;
   }
 
   /**
@@ -2958,27 +3013,7 @@ const isMultimodal = !!(imagePaths?.length);
     // no detail is lost) and encode as JPEG 85% — typically 200-250 KB per image.
     // 4 screenshots × ~278KB base64 = ~1.1 MB, well within the 4 MB server limit.
     if (imagePaths?.length) {
-      const images: { mime_type: string; data: string }[] = [];
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          try {
-            const compressed = await sharp(p)
-              .resize(1920, 1920, { fit: 'inside', withoutEnlargement: true })
-              .jpeg({ quality: 85 })
-              .toBuffer();
-            images.push({ mime_type: 'image/jpeg', data: compressed.toString('base64') });
-          } catch (compressErr: any) {
-            // Fallback: send raw if sharp fails (e.g. unsupported format)
-            console.warn('[LLMHelper] Image compression failed, sending raw:', compressErr.message);
-            const imageData = await fs.promises.readFile(p);
-            if (imageData.length > 500 * 1024) {
-              console.warn('[LLMHelper] Raw fallback image too large to send, skipping:', p);
-              continue;
-            }
-            images.push({ mime_type: 'image/png', data: imageData.toString('base64') });
-          }
-        }
-      }
+      const images = await this.prepareLegacyApiImages(imagePaths, '[LLMHelper]');
       if (images.length) body.images = images;
     }
     if (systemPrompt) body.system = systemPrompt;
@@ -3165,12 +3200,14 @@ const isMultimodal = !!(imagePaths?.length);
         }
         throw error;
       }
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(errorPayload.error || `managed_ai_http_${response.status}`);
+      }
       const payload = await response.json().catch(() => ({})) as {
         content?: string;
-        error?: string;
         model?: string;
       };
-      if (!response.ok) throw new Error(payload.error || `managed_ai_http_${response.status}`);
       if (!payload.content?.trim()) throw new Error('managed_ai_empty_response');
       this.lastProviderModel = payload.model || 'hintily-managed';
       return payload.content;
@@ -3297,11 +3334,9 @@ const isMultimodal = !!(imagePaths?.length);
 
     if (imagePaths?.length) {
       const contentParts: any[] = [{ type: "text", text: userMessage }];
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const { mimeType, data } = await this.processImage(p);
-          contentParts.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } });
-        }
+      const processedImages = await this.processExistingImages(imagePaths);
+      for (const { mimeType, data } of processedImages) {
+        contentParts.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } });
       }
       messages.push({ role: "user", content: contentParts });
     } else {
@@ -3378,8 +3413,8 @@ const isMultimodal = !!(imagePaths?.length);
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
     if (imagePaths?.length) {
       const content: any[] = [{ type: "text", text: userMessage }];
-      for (const p of imagePaths) {
-        const b64 = (await fs.promises.readFile(p)).toString("base64");
+      const encodedImages = await this.readImagesAsBase64(imagePaths);
+      for (const b64 of encodedImages) {
         content.push({ type: "image_url", image_url: { url: `data:image/png;base64,${b64}` } });
       }
       messages.push({ role: "user", content });
@@ -3507,18 +3542,16 @@ const isMultimodal = !!(imagePaths?.length);
 
     const content: any[] = [];
     if (imagePaths?.length) {
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const { mimeType, data } = await this.processImage(p);
-          content.push({
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-              data,
-            }
-          });
-        }
+      const processedImages = await this.processExistingImages(imagePaths);
+      for (const { mimeType, data } of processedImages) {
+        content.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+            data,
+          }
+        });
       }
     }
     content.push({ type: "text", text: userMessage });
@@ -3662,12 +3695,12 @@ const isMultimodal = !!(imagePaths?.length);
       });
       clearTimeout(customTimeout);
 
-      const data = await response.json();
       console.log(`[LLMHelper] Custom Provider response received`, { status: response.status, ok: response.ok });
 
       if (!response.ok) {
         throw new Error(`Custom Provider HTTP ${response.status}`);
       }
+      const data = await response.json();
 
       // 6. Extract Answer - try common response formats
       const extracted = this.extractFromCommonFormats(data);
@@ -3751,16 +3784,14 @@ const isMultimodal = !!(imagePaths?.length);
 
     if (imagePaths?.length) {
       const contents: any[] = [{ text: fullMessage }];
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const { mimeType, data } = await this.processImage(p);
-          contents.push({
-            inlineData: {
-              mimeType,
-              data,
-            }
-          });
-        }
+      const processedImages = await this.processExistingImages(imagePaths);
+      for (const { mimeType, data } of processedImages) {
+        contents.push({
+          inlineData: {
+            mimeType,
+            data,
+          }
+        });
       }
 
       // Use current model for multimodal (allows Pro fallback)
@@ -3798,11 +3829,9 @@ const isMultimodal = !!(imagePaths?.length);
     }
 
     const contentParts: any[] = [{ type: "text", text: userMessage }];
-    for (const p of imagePaths) {
-      if (fs.existsSync(p)) {
-        const { mimeType, data } = await this.processImage(p);
-        contentParts.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } });
-      }
+    const processedImages = await this.processExistingImages(imagePaths);
+    for (const { mimeType, data } of processedImages) {
+      contentParts.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } });
     }
     messages.push({ role: "user", content: contentParts });
 
@@ -3855,11 +3884,9 @@ const isMultimodal = !!(imagePaths?.length);
               name: `Gemini Flash (${modelId})`,
               execute: async () => {
                 const contents: any[] = [{ text: `${systemPrompt}\n\n${userPrompt}` }];
-                for (const p of imagePaths) {
-                  if (fs.existsSync(p)) {
-                    const { mimeType, data } = await this.processImage(p);
-                    contents.push({ inlineData: { mimeType, data } });
-                  }
+                const processedImages = await this.processExistingImages(imagePaths);
+                for (const { mimeType, data } of processedImages) {
+                  contents.push({ inlineData: { mimeType, data } });
                 }
                 return await this.generateContent(contents, modelId);
               }
@@ -3884,11 +3911,9 @@ const isMultimodal = !!(imagePaths?.length);
               name: `Gemini Pro (${modelId})`,
               execute: async () => {
                 const contents: any[] = [{ text: `${systemPrompt}\n\n${userPrompt}` }];
-                for (const p of imagePaths) {
-                  if (fs.existsSync(p)) {
-                    const { mimeType, data } = await this.processImage(p);
-                    contents.push({ inlineData: { mimeType, data } });
-                  }
+                const processedImages = await this.processExistingImages(imagePaths);
+                for (const { mimeType, data } of processedImages) {
+                  contents.push({ inlineData: { mimeType, data } });
                 }
                 return await this.generateContent(contents, modelId);
               }
@@ -3942,7 +3967,7 @@ const isMultimodal = !!(imagePaths?.length);
       ModelFamily.GROQ_LLAMA,
     ];
 
-    const sortedAllTiers = [...allTiers].sort((a, b) => {
+    const sortedAllTiers = allTiers.toSorted((a, b) => {
       const aIdx = VISION_PRIORITY.indexOf(a.family);
       const bIdx = VISION_PRIORITY.indexOf(b.family);
       if (aIdx === -1 && bIdx === -1) return 0;
@@ -6138,27 +6163,7 @@ const isMultimodal = !!(imagePaths?.length);
     // Resize to max 1920px and encode as JPEG 85% — typically 200-250 KB per image.
     // 4 screenshots × ~278KB base64 = ~1.1 MB, well within the 4 MB server limit.
     if (imagePaths?.length) {
-      const images: { mime_type: string; data: string }[] = [];
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          try {
-            const compressed = await sharp(p)
-              .resize(1920, 1920, { fit: 'inside', withoutEnlargement: true })
-              .jpeg({ quality: 85 })
-              .toBuffer();
-            images.push({ mime_type: 'image/jpeg', data: compressed.toString('base64') });
-          } catch (compressErr: any) {
-            // Fallback: send raw if sharp fails (e.g. unsupported format)
-            console.warn('[LLMHelper] streamWithNatively: image compression failed, sending raw:', compressErr.message);
-            const imageData = await fs.promises.readFile(p);
-            if (imageData.length > 500 * 1024) {
-              console.warn('[LLMHelper] streamWithNatively: raw fallback image too large, skipping:', p);
-              continue;
-            }
-            images.push({ mime_type: 'image/png', data: imageData.toString('base64') });
-          }
-        }
-      }
+      const images = await this.prepareLegacyApiImages(imagePaths, '[LLMHelper] streamWithNatively');
       if (images.length) body.images = images;
     }
 
@@ -6489,12 +6494,9 @@ const isMultimodal = !!(imagePaths?.length);
     }
 
     const contentParts: any[] = [{ type: "text", text: userMessage }];
-    for (const p of imagePaths) {
-      if (fs.existsSync(p)) {
-        // Process image: resize to max 1536px + JPEG 80% to stay within Groq's request size limit
-        const { mimeType, data } = await this.processImage(p);
-        contentParts.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } });
-      }
+    const processedImages = await this.processExistingImages(imagePaths);
+    for (const { mimeType, data } of processedImages) {
+      contentParts.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } });
     }
     messages.push({ role: "user", content: contentParts });
 
@@ -6686,8 +6688,8 @@ const isMultimodal = !!(imagePaths?.length);
     if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
     if (imagePaths?.length) {
       const content: any[] = [{ type: "text", text: userMessage }];
-      for (const p of imagePaths) {
-        const b64 = (await fs.promises.readFile(p)).toString("base64");
+      const encodedImages = await this.readImagesAsBase64(imagePaths);
+      for (const b64 of encodedImages) {
         content.push({ type: "image_url", image_url: { url: `data:image/png;base64,${b64}` } });
       }
       messages.push({ role: "user", content });
@@ -6738,11 +6740,9 @@ const isMultimodal = !!(imagePaths?.length);
     }
 
     const contentParts: any[] = [{ type: "text", text: userMessage }];
-    for (const p of imagePaths) {
-      if (fs.existsSync(p)) {
-        const { mimeType, data } = await this.processImage(p);
-        contentParts.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } });
-      }
+    const processedImages = await this.processExistingImages(imagePaths);
+    for (const { mimeType, data } of processedImages) {
+      contentParts.push({ type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } });
     }
     messages.push({ role: "user", content: contentParts });
 
@@ -6785,18 +6785,16 @@ const isMultimodal = !!(imagePaths?.length);
     const model = modelId || (this.isClaudeModel(this.currentModelId) ? this.currentModelId : CLAUDE_MODEL);
 
     const imageContentParts: any[] = [];
-    for (const p of imagePaths) {
-      if (fs.existsSync(p)) {
-        const { mimeType, data } = await this.processImage(p);
-        imageContentParts.push({
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-            data,
-          }
-        });
-      }
+    const processedImages = await this.processExistingImages(imagePaths);
+    for (const { mimeType, data } of processedImages) {
+      imageContentParts.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+          data,
+        }
+      });
     }
 
     if (abortSignal?.aborted) return;
@@ -6859,16 +6857,14 @@ const isMultimodal = !!(imagePaths?.length);
 
     const contents: any[] = [{ text: fullMessage }];
     if (imagePaths?.length) {
-      for (const p of imagePaths) {
-        if (fs.existsSync(p)) {
-          const { mimeType, data } = await this.processImage(p);
-          contents.push({
-            inlineData: {
-              mimeType,
-              data,
-            }
-          });
-        }
+      const processedImages = await this.processExistingImages(imagePaths);
+      for (const { mimeType, data } of processedImages) {
+        contents.push({
+          inlineData: {
+            mimeType,
+            data,
+          }
+        });
       }
     }
 
@@ -7070,14 +7066,18 @@ const isMultimodal = !!(imagePaths?.length);
 
     let images: string[] | undefined;
     if (imagePaths?.length) {
-      const encoded: string[] = [];
-      for (const p of imagePaths) {
+      const encodedResults = await Promise.all(imagePaths.map(async (imagePath) => {
         try {
-          const data = await fs.promises.readFile(p);
-          encoded.push(data.toString("base64"));
+          const data = await fs.promises.readFile(imagePath);
+          return data.toString("base64");
         } catch (e) {
-          console.warn("[LLMHelper] streamWithOllama: failed to read image, skipping:", p, e);
+          console.warn("[LLMHelper] streamWithOllama: failed to read image, skipping:", imagePath, e);
+          return null;
         }
+      }));
+      const encoded: string[] = [];
+      for (const result of encodedResults) {
+        if (result !== null) encoded.push(result);
       }
       if (encoded.length) images = encoded;
     }
@@ -7592,10 +7592,10 @@ const isMultimodal = !!(imagePaths?.length);
         // SECURITY FIX (P1-1): Validate EACH PID token from lsof before shell interpolation.
         // lsof -t returns one PID per line when multiple processes are on the port.
         const pids = stdout.trim().split(/\s+/).filter(p => /^\d+$/.test(p));
-        for (const pid of pids) {
+        await Promise.all(pids.map(async (pid) => {
           console.log(`[LLMHelper] Found blocking PID: ${pid}. Killing...`);
           await execAsync(`kill -9 ${pid}`);
-        }
+        }));
         if (pids.length === 0 && stdout.trim()) {
           console.warn(`[LLMHelper] Unexpected lsof output (no valid PIDs): "${stdout.trim().substring(0, 50)}". Skipping kill.`);
         }
