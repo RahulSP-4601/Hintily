@@ -15,8 +15,7 @@
 // DEV-ONLY FORCE-SHOW:
 //   ?review=force  in URL query string  → modal opens immediately + every reopen
 //   window.reviewForceShow()             → same flag, callable from devtools
-//   Set NativelyReviewService.recordSessionStart()/recordSessionEnd()  in devtools
-//   to re-arm threshold-based eligibility checks without restarting.
+//   Use the review dev helpers below to re-arm eligibility checks.
 //
 // Honors the existing 4 product semantics even in force mode:
 //   * Dismiss / submit / forever all still mark local + backend state.
@@ -106,11 +105,33 @@ interface ReviewPromptHostProps {
 const ReviewPromptHost: React.FC<ReviewPromptHostProps> = ({ paused, isOpen: isOpenProp, onClose: onCloseProp }) => {
     const [isOpenInternal, setIsOpen] = useState(false)
     const [forceTick, setForceTick] = useState(0)
+    const [isSignedIn, setIsSignedIn] = useState(false)
     const checkedRef = useRef(false)
     const isOpenRef = useRef(false)
 
     const isOrchestratorControlled = isOpenProp !== undefined
     const isOpen = isOrchestratorControlled ? isOpenProp : isOpenInternal
+
+    useEffect(() => {
+        let mounted = true
+        const applyStatus = (status: { state?: string } | null | undefined) => {
+            if (!mounted) return
+            const signedIn = status?.state === "signed_in"
+            setIsSignedIn(signedIn)
+            if (!signedIn) {
+                isOpenRef.current = false
+                setIsOpen(false)
+            }
+        }
+        void window.electronAPI?.hintilyAuthGetStatus?.()
+            .then(applyStatus)
+            .catch(() => applyStatus(null))
+        const unsubscribe = window.electronAPI?.onHintilyAuthChanged?.(applyStatus)
+        return () => {
+            mounted = false
+            unsubscribe?.()
+        }
+    }, [])
 
     // Expose dev helpers on `window` so we can re-show / reset state from devtools
     // without re-launching the app. These are no-ops in production.
@@ -146,7 +167,7 @@ const ReviewPromptHost: React.FC<ReviewPromptHostProps> = ({ paused, isOpen: isO
     }, [])
 
     const check = useCallback(async () => {
-        if (isOpenRef.current) return
+        if (!isSignedIn || isOpenRef.current) return
         try {
             if (!window.electronAPI?.reviewGetPromptState) return
             const res = await window.electronAPI.reviewGetPromptState()
@@ -161,7 +182,7 @@ const ReviewPromptHost: React.FC<ReviewPromptHostProps> = ({ paused, isOpen: isO
         } catch {
             /* noop */
         }
-    }, [forceTick])
+    }, [forceTick, isSignedIn])
 
     useEffect(() => {
         if (paused) return
@@ -256,6 +277,8 @@ const ReviewPromptHost: React.FC<ReviewPromptHostProps> = ({ paused, isOpen: isO
         }
         return res || { ok: false, error: "no_api" }
     }, [])
+
+    if (!isSignedIn) return null
 
     return (
         <ReviewModal

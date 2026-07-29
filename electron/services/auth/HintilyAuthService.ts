@@ -220,8 +220,14 @@ export class HintilyAuthService extends EventEmitter {
           }
           const oauthError = requestUrl.searchParams.get('error_description') || requestUrl.searchParams.get('error');
           if (oauthError) {
+            const wasCancelled = requestUrl.searchParams.get('error') === 'access_denied';
             response.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-            response.end('<h2>Hintily sign-in was cancelled.</h2><p>You can close this window.</p>');
+            response.end(
+              wasCancelled
+                ? '<h2>Hintily sign-in was cancelled.</h2><p>You can close this window.</p>'
+                : '<h2>Hintily could not complete sign-in.</h2><p>Return to the app for details, then try again.</p>',
+            );
+            console.error('[HintilyAuth] OAuth provider returned an error:', safeMessage(oauthError));
             finish(() => reject(new Error(oauthError)));
             return;
           }

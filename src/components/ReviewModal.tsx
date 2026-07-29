@@ -91,16 +91,15 @@ const ReviewModal: React.FC<ReviewModalProps> = ({
     const [submitting, setSubmitting] = useState(false)
     const [submitError, setSubmitError] = useState<string | null>(null)
 
-    // Testimonial state. Public use is the default and assumed-on (the
-    // permission was the noisy/extra "Allow Natively..." toggle). The
-    // remaining meaningful toggle is whether to display the user's name
-    // publicly or default to "Anonymous Natively user".
+    // Testimonial state. Public use and public attribution are separate,
+    // explicit opt-ins; neither is inferred from submitting private feedback.
     const [reviewId, setReviewId] = useState<string | null>(null)
     // SOFT PREFILL only — prefilled values are held in *separate* state, NOT
     // copied into the live form fields. The user must explicitly opt in to
     // use each prefill via the chip button.
     const [name, setName] = useState("")
     const [namePrefillUsed, setNamePrefillUsed] = useState(false)
+    const [canUsePublicly, setCanUsePublicly] = useState(false)
     const [displayNamePublicly, setDisplayNamePublicly] = useState(false)
     const [testimonialBusy, setTestimonialBusy] = useState(false)
     const [testimonialError, setTestimonialError] = useState<string | null>(null)
@@ -121,6 +120,7 @@ const ReviewModal: React.FC<ReviewModalProps> = ({
             setReviewId(null)
             setName("")
             setNamePrefillUsed(false)
+            setCanUsePublicly(false)
             setDisplayNamePublicly(false)
             setTestimonialBusy(false)
             setTestimonialError(null)
@@ -204,10 +204,8 @@ const ReviewModal: React.FC<ReviewModalProps> = ({
                 name: name.trim() || null,
                 role: null,
                 company: null,
-                // Public use is the assumed default. The single user-facing
-                // toggle below controls whether the name is shown.
-                can_use_publicly: true,
-                display_name_publicly: displayNamePublicly,
+                can_use_publicly: canUsePublicly,
+                display_name_publicly: canUsePublicly && displayNamePublicly,
                 hardware_id: hardwareId || null,
             })
             if (!res.ok) {
@@ -223,8 +221,40 @@ const ReviewModal: React.FC<ReviewModalProps> = ({
         }
     }
 
-    const handleSkipTestimonial = () => {
-        setStep("thanks")
+    const handleSkipTestimonial = async () => {
+        // With no publication consent, skipping attribution leaves the review
+        // private and requires no second API call.
+        if (!canUsePublicly) {
+            setStep("thanks")
+            return
+        }
+        if (!reviewId) {
+            setTestimonialError("Couldn't save anonymous publication consent. Try again.")
+            return
+        }
+        setTestimonialBusy(true)
+        setTestimonialError(null)
+        try {
+            const res = await updateTestimonial(reviewId, {
+                name: null,
+                role: null,
+                company: null,
+                can_use_publicly: true,
+                display_name_publicly: false,
+                hardware_id: hardwareId || null,
+            })
+            if (!res.ok) {
+                setTestimonialError(res.error || "Couldn't save. Try again.")
+                setTestimonialBusy(false)
+                return
+            }
+            setDisplayNamePublicly(false)
+            setTestimonialBusy(false)
+            setStep("thanks")
+        } catch (err: any) {
+            setTestimonialError(err?.message || "Network error.")
+            setTestimonialBusy(false)
+        }
     }
 
     const ratingLabel = useMemo(() => {
@@ -300,6 +330,11 @@ const ReviewModal: React.FC<ReviewModalProps> = ({
                                         setNamePrefillUsed(true)
                                     }
                                 }}
+                                canUsePublicly={canUsePublicly}
+                                setCanUsePublicly={(allowed) => {
+                                    setCanUsePublicly(allowed)
+                                    if (!allowed) setDisplayNamePublicly(false)
+                                }}
                                 displayNamePublicly={displayNamePublicly}
                                 setDisplayNamePublicly={setDisplayNamePublicly}
                                 busy={testimonialBusy}
@@ -313,7 +348,8 @@ const ReviewModal: React.FC<ReviewModalProps> = ({
                         {step === "thanks" && (
                             <StepThanks
                                 key="thanks"
-                                displayNamePublicly={displayNamePublicly}
+                                canUsePublicly={canUsePublicly}
+                                displayNamePublicly={canUsePublicly && displayNamePublicly}
                                 onClose={closeModal}
                                 reduced={reduced}
                             />
@@ -385,7 +421,7 @@ const StepReview: React.FC<StepReviewProps> = ({
                 <div className="flex items-center gap-2">
                     <Star size={14} className="text-amber-400" />
                     <h2 id="review-modal-title-review" className="text-sm font-medium text-[#E9E9E9] tracking-wide">
-                        How's Natively working for you?
+                        How's Hintily working for you?
                     </h2>
                 </div>
                 <motion.button
@@ -597,6 +633,8 @@ interface StepTestimonialProps {
     prefillName?: string
     namePrefillSuggested: boolean
     onAcceptNamePrefill: () => void
+    canUsePublicly: boolean
+    setCanUsePublicly: (b: boolean) => void
     displayNamePublicly: boolean
     setDisplayNamePublicly: (b: boolean) => void
     busy: boolean
@@ -612,6 +650,7 @@ const StepTestimonial: React.FC<StepTestimonialProps> = ({
     prefillName = "",
     namePrefillSuggested,
     onAcceptNamePrefill,
+    canUsePublicly, setCanUsePublicly,
     displayNamePublicly, setDisplayNamePublicly,
     busy, error,
     onSave, onSkip, onClose, reduced,
@@ -656,11 +695,22 @@ const StepTestimonial: React.FC<StepTestimonialProps> = ({
 
                 <div className="pt-2">
                     <Checkbox
+                        checked={canUsePublicly}
+                        onChange={setCanUsePublicly}
+                        label="Allow Hintily to publish this feedback"
+                        disabled={busy}
+                        hint="Off by default. Your feedback otherwise stays private."
+                        reduced={reduced}
+                    />
+                </div>
+
+                <div>
+                    <Checkbox
                         checked={displayNamePublicly}
                         onChange={setDisplayNamePublicly}
                         label="Show my name publicly"
-                        disabled={busy}
-                        hint="Otherwise shown as Anonymous Natively user."
+                        disabled={busy || !canUsePublicly}
+                        hint="Otherwise shown as Anonymous Hintily user."
                         reduced={reduced}
                     />
                 </div>
@@ -830,12 +880,13 @@ const Checkbox: React.FC<CheckboxProps> = ({ checked, onChange, label, hint, dis
 // ─── Step 3: thanks ───────────────────────────────────────────────────────
 
 interface StepThanksProps {
+    canUsePublicly: boolean
     displayNamePublicly: boolean
     onClose: () => void
     reduced: boolean
 }
 
-const StepThanks: React.FC<StepThanksProps> = ({ displayNamePublicly, onClose, reduced }) => {
+const StepThanks: React.FC<StepThanksProps> = ({ canUsePublicly, displayNamePublicly, onClose, reduced }) => {
     return (
         <motion.div
             initial={{ opacity: 0, scale: reduced ? 1 : 0.92, y: reduced ? 0 : 14 }}
@@ -877,9 +928,11 @@ const StepThanks: React.FC<StepThanksProps> = ({ displayNamePublicly, onClose, r
                     delay: reduced ? 0 : 0.26,
                 }}
             >
-                {displayNamePublicly
-                    ? "Your name will appear alongside the testimonial."
-                    : "It will appear as Anonymous Natively user."}
+                {!canUsePublicly
+                    ? "Your feedback is private and will not be published."
+                    : displayNamePublicly
+                        ? "Your name will appear alongside the testimonial."
+                        : "It will appear as Anonymous Hintily user."}
             </motion.p>
 
             <motion.button
