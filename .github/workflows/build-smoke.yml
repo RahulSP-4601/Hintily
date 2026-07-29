@@ -75,6 +75,7 @@ jobs:
     # Without credentials the suite is skipped cleanly via the env gate.
     name: API Smoke (weekly)
     runs-on: macos-latest
+    timeout-minutes: 5
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
 
     steps:
@@ -94,7 +95,7 @@ jobs:
         run: npm run build:electron
 
       - name: Run API smoke tests
-        run: npm test -- --test-name-pattern 'Natively API'
+        run: node --test electron/services/__tests__/NativelyApiE2E.test.mjs
         env:
           RUN_NATIVELY_API_E2E: ${{ secrets.RUN_NATIVELY_API_E2E }}
           NATIVELY_API_KEY: ${{ secrets.NATIVELY_API_KEY }}

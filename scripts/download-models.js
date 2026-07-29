@@ -52,12 +52,12 @@ async function downloadModels() {
     try {
         // 1. Embedding model (RAG)
         console.log('[download-models] Downloading Xenova/all-MiniLM-L6-v2...');
-        await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+        await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { dtype: 'q8' });
         console.log('[download-models] all-MiniLM-L6-v2 downloaded.');
 
         // 2. Zero-shot classification model (Intent Classifier)
         console.log('[download-models] Downloading Xenova/mobilebert-uncased-mnli...');
-        await pipeline('zero-shot-classification', 'Xenova/mobilebert-uncased-mnli');
+        await pipeline('zero-shot-classification', 'Xenova/mobilebert-uncased-mnli', { dtype: 'q8' });
         console.log('[download-models] mobilebert-uncased-mnli downloaded.');
 
         // 3. Cross-encoder reranker (smart-retrieval Phase 1/3 — confidence-gated
@@ -92,4 +92,3 @@ if (process.argv.includes('--verify')) {
         process.exit(1);
     });
 }
-
